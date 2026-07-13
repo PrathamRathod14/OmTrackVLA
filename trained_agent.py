@@ -232,8 +232,17 @@ class GTBBoxAgent(AgentConfig):
             print(f"Successfully save the episode video with episode id {episode.episode_id}")
 
             self.rgb_list = []
-        
+
         self.first_inside = True
+
+        # Clear per-episode temporal state. Without this, a new episode starts
+        # with the frame buffer and coarse-token history left over from the
+        # previous episode (often a different scene and a different target
+        # person), which corrupts the planner's input for the first
+        # `history` steps of every episode after the first one.
+        self.frame_buffer.clear()
+        self._coarse_hist_tokens.clear()
+        self._last_predicted_traj = None
 
     def act(self, observations, detector, episode_id, instruction: Optional[str] = None):
         self.episode_id = episode_id
