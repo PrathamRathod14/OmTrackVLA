@@ -1,0 +1,31 @@
+/**/omtrackvla_ridgeback:
+  ros__parameters:
+    camera_topic: camera/color/image_raw
+    camera_compressed: false
+    scan_topic: sensors/scan
+    estop_topic: platform/emergency_stop
+    cmd_vel_topic: cmd_vel
+    cmd_vel_stamped: true
+    # Edit this line to change the natural-language target used at startup.
+    prompt: Follow the person holding something blue color basket.
+    dry_run: true
+    require_scan: true
+    require_estop: true
+    inference_port: 18765
+    inference_rate: 2.0
+    control_rate: 20.0
+    enable_timeout: 0.5
+    camera_timeout: 0.75
+    inference_timeout: 1.5
+    scan_timeout: 0.5
+    estop_timeout: 1.0
+    # Measured from the LiDAR origin. The R100 chassis is 0.960 x 0.793 m,
+    # so keep this above the 0.48 m front half-length.
+    obstacle_stop_distance: 0.70
+    max_linear_x: 0.20
+    max_linear_y: 0.20
+    max_angular_z: 0.35
+    max_linear_accel: 0.30
+    max_angular_accel: 0.50
+    lateral_sign: 1.0
+    yaw_sign: 1.0

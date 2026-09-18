@@ -221,10 +221,14 @@ class VisionCacheConfig:
         # Check environment variable for local DINOv3 model path
         if self.dino_model_name is None:
             env_path = os.getenv("DINOV3_MODEL_PATH", "").strip()
-            if env_path and os.path.exists(env_path):
+            if env_path and os.path.isfile(os.path.join(env_path, "config.json")):
                 self.dino_model_name = env_path
             else:
                 self.dino_model_name = "facebook/dinov3-vits16-pretrain-lvd1689m"
+        # Allow fully offline/local runs for the much larger SigLIP tower too.
+        siglip_path = os.getenv("SIGLIP_MODEL_PATH", "").strip()
+        if siglip_path and os.path.isfile(os.path.join(siglip_path, "config.json")):
+            self.siglip_model_name = siglip_path
 
 
 class VisionFeatureCacher(nn.Module):
@@ -505,4 +509,3 @@ if __name__ == "__main__":
             projector = CrossModalityProjector(in_dim=Vfine.shape[-1], out_dim=256)
             EVfine = projector(Vfine.float())  # (V, 64, 256)
             print("Projected tokens shape:", tuple(EVfine.shape))
-
