@@ -237,6 +237,15 @@ equivalent to 128 GB of dedicated GPU VRAM. JetPack 7.2.1 lists Ubuntu 24.04,
 CUDA 13.2.2, and TensorRT 10.16.2; ROS 2 Jazzy supports Ubuntu 24.04 Arm64.
 These are platform specifications, not OmTrackVLA performance results.
 
+The current `5,403 MiB` loaded stack fits in the RTX 5060's 8,151 MiB, so Thor's
+larger memory pool alone does not remove a measured capacity bottleneck. The RTX 5060
+has a discrete Blackwell GPU rated at 3,840 CUDA cores and 145 W graphics power;
+Thor's integrated Blackwell GPU has 2,560 CUDA cores in a 40-130 W system power
+range. Core count, advertised AI throughput, and power ratings cannot predict this
+pipeline's latency because the CPU stages, memory system, kernel mix, and thermal
+state differ. Thor may improve an optimized model stage yet be slower on another
+stage. Faster end-to-end following remains a hypothesis, not an expected result.
+
 Migration gates:
 
 1. Build the Python 3.9 inference environment and ROS 2 Jazzy bridge for Arm64;
@@ -256,6 +265,7 @@ Migration gates:
    pool or advertised AI throughput alone is not evidence of faster following.
 
 Platform sources: [NVIDIA Thor specifications](https://www.nvidia.com/en-us/autonomous-machines/embedded-systems/jetson-thor/),
+[NVIDIA RTX 5060 specifications](https://www.nvidia.com/en-us/geforce/graphics-cards/50-series/rtx-5060-family/),
 [JetPack releases](https://developer.nvidia.com/embedded/jetpack/downloads),
 [NVIDIA on Thor shared memory](https://docs.nvidia.com/datacenter/tesla/mig-user-guide/supported-mig-profiles.html),
 and [ROS 2 Jazzy supported platforms](https://www.openrobotics.org/blog/2024/5/ros-jazzy-jalisco-released).
@@ -267,6 +277,10 @@ and [ROS 2 Jazzy supported platforms](https://www.openrobotics.org/blog/2024/5/r
 - Expanded the Thor option into explicit Arm64 build, device-interface, replay,
   performance, power, and safety gates. No Thor hardware is attached and no speedup
   is claimed. The current RTX 5060 measurements remain the baseline.
+- Revisited the expectation that Thor will run faster. The existing models already
+  fit in RTX 5060 memory, and vendor peak specifications do not determine the
+  measured 3 Hz target and 2 Hz planner pipeline. The comparison remains open until
+  matched full-pipeline runs on Thor establish latency and control timing.
 
 - Confirmed the hardware as an RTX 5060 with 8,151 MiB VRAM and an eight-core
   i7-9700TE host.
