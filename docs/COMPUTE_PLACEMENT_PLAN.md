@@ -262,6 +262,13 @@ shared DINOv3/SigLIP preprocessing, and feature tensors would still use CUDA. RO
 tracking association, target/depth geometry, command fusion, and the independent 20 Hz
 safety gate remain CPU tasks unless a separately measured change justifies moving them.
 
+Feasibility conclusion: a Thor port is technically plausible because JetPack supports
+Thor with CUDA on Arm64, ROS 2 Jazzy supports Ubuntu 24.04 Arm64, and PyTorch provides
+Arm wheels for Thor. The exact pinned OmTrackVLA/Python 3.9 dependency set, patched
+Hokuyo driver, and Ridgeback device interfaces have not been built or tested on Thor.
+Therefore deployment feasibility for this repository is not yet verified, and no
+performance or safety equivalence is claimed.
+
 NVIDIA lists the Jetson AGX Thor Developer Kit with a 14-core Arm CPU, Blackwell GPU,
 128 GB shared LPDDR5X, and a 40-130 W operating range. Its shared system memory is not
 equivalent to 128 GB of dedicated GPU VRAM. JetPack 7.2.1 lists Ubuntu 24.04,
@@ -298,6 +305,7 @@ Migration gates:
 Platform sources: [NVIDIA Thor specifications](https://www.nvidia.com/en-us/autonomous-machines/embedded-systems/jetson-thor/),
 [NVIDIA RTX 5060 specifications](https://www.nvidia.com/en-us/geforce/graphics-cards/50-series/rtx-5060-family/),
 [JetPack releases](https://developer.nvidia.com/embedded/jetpack/downloads),
+[PyTorch Arm support for Thor](https://discuss.pytorch.org/t/does-torch-now-offically-supported-nvidia-jetson/224665/2),
 [NVIDIA on Thor shared memory](https://docs.nvidia.com/datacenter/tesla/mig-user-guide/supported-mig-profiles.html),
 and [ROS 2 Jazzy supported platforms](https://www.openrobotics.org/blog/2024/5/ros-jazzy-jalisco-released).
 
@@ -305,6 +313,9 @@ and [ROS 2 Jazzy supported platforms](https://www.openrobotics.org/blog/2024/5/r
 
 ### 2026-09-28
 
+- Confirmed the Thor feasibility boundary: its CUDA/Arm64/ROS/PyTorch platform stack
+  exists, but this repository's pinned inference dependencies, ROS interfaces, and
+  patched scanner driver still require an on-device build and validation.
 - Added opt-in dry-run JSONL stage profiling in the inference server and ROS bridge,
   plus a summary command. Existing 59 tests and two profiling tests pass. CUDA
   synchronization makes profiled timing diagnostic rather than directly comparable
