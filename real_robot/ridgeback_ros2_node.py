@@ -27,7 +27,7 @@ from std_msgs.msg import Bool, Empty, String
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from protocol import receive_message, send_message
 from perf_log import PerfLog
-from safety import Command, SafetyConfig, SafetyState, directional_obstacle_distance, evaluate, rate_limit
+from safety import Command, SafetyConfig, SafetyState, directional_obstacle_distance, evaluate, is_fresh, rate_limit
 from target_geometry import CameraGeometry, extrinsics_rotation, fuse_target_command, locate_target, trajectory_follows_target
 
 try:
@@ -493,7 +493,9 @@ class RidgebackController(Node):
             try:
                 if self._socket is None:
                     self._socket = self._connect()
-                    self.get_logger().info("Connected to the local OmTrackVLA inference server")
+                    host = str(self.get_parameter("inference_host").value)
+                    port = int(self.get_parameter("inference_port").value)
+                    self.get_logger().info(f"Connected to OmTrackVLA inference server at {host}:{port}")
                 self._request_id += 1
                 transport_started = time.perf_counter()
                 send_message(self._socket, {
@@ -509,6 +511,10 @@ class RidgebackController(Node):
                 stages_ms["response_wait"] = (time.perf_counter() - response_started) * 1000.0
                 if response.get("request_id") != self._request_id or not response.get("ok"):
                     raise RuntimeError(str(response.get("error", "invalid inference response")))
+                if not is_fresh(
+                    self._now(), frame_stamp, float(self.get_parameter("camera_timeout").value)
+                ):
+                    raise RuntimeError("inference response belongs to a stale camera frame")
                 if reset_target:
                     with self._lock:
                         self._reset_target_requested = False

@@ -1,7 +1,7 @@
 import math
 import unittest
 
-from real_robot.safety import SafetyConfig, SafetyState, directional_obstacle_distance, evaluate, rate_limit
+from real_robot.safety import SafetyConfig, SafetyState, directional_obstacle_distance, evaluate, is_fresh, rate_limit
 
 
 class SafetyTests(unittest.TestCase):
@@ -71,6 +71,14 @@ class SafetyTests(unittest.TestCase):
     def test_stale_inputs_stop(self):
         self.assertEqual(evaluate(SafetyConfig(), self.ready_state(camera_stamp=8.0), 10.1)[1], "camera_stale")
         self.assertEqual(evaluate(SafetyConfig(), self.ready_state(scan_stamp=8.0), 10.1)[1], "scan_stale")
+
+    def test_remote_inference_loss_stops(self):
+        config = SafetyConfig()
+        self.assertEqual(evaluate(config, self.ready_state(inference_connected=False), 10.1)[1],
+                         "inference_disconnected")
+        self.assertEqual(evaluate(config, self.ready_state(inference_stamp=8.0), 10.1)[1],
+                         "inference_stale")
+        self.assertFalse(is_fresh(10.1, 9.0, config.camera_timeout))
 
     def test_target_lock_is_required(self):
         state = self.ready_state(target_valid=False)

@@ -255,29 +255,35 @@ acceptable full-pipeline latency and memory.
 
 ## Jetson AGX Thor migration assessment
 
-Status: proposed hardware port; no Thor build or benchmark has been run. "Move to
-Thor" means replacing the present x86 host plus discrete RTX 5060 with an Arm64
-system that has an integrated NVIDIA GPU. It does not replace CUDA. The neural models,
+Status: split inference port implemented and tested in a no-person dry-run on Thor;
+locked-target, planner, network-delay/reconnect, and armable equivalence are not yet
+verified. The chosen first port retains the x86/RTX host for ROS and motor safety,
+while Thor runs model inference over the dedicated robot network. A later full move
+would replace the present x86 host plus discrete RTX 5060 with an Arm64 system that
+has an integrated NVIDIA GPU. It does not replace CUDA. The neural models,
 shared DINOv3/SigLIP preprocessing, and feature tensors would still use CUDA. ROS 2,
 tracking association, target/depth geometry, command fusion, and the independent 20 Hz
 safety gate remain CPU tasks unless a separately measured change justifies moving them.
 
-Feasibility conclusion: a Thor port is technically plausible because JetPack supports
-Thor with CUDA on Arm64, ROS 2 Jazzy supports Ubuntu 24.04 Arm64, and PyTorch provides
-Arm wheels for Thor. The exact pinned OmTrackVLA/Python 3.9 dependency set, patched
-Hokuyo driver, and Ridgeback device interfaces have not been built or tested on Thor.
-Therefore deployment feasibility for this repository is not yet verified, and no
-performance or safety equivalence is claimed.
+Feasibility conclusion: the project-specific split port loads the real model stack
+on the attached Thor and processes Ridgeback camera frames. Thor is
+`nvidia-thor-r100-0160.local` (`192.168.131.51`, JetPack 7.0/Arm64) and the
+Ridgeback source address is `192.168.131.1`. A separate Python 3.12 environment
+with CUDA PyTorch 2.10.0+cu130, torchvision 0.25.0+cu130, and matching project
+dependencies was built at `/home/robot/dev/omtrackvla/.conda-env`. The weights
+were copied separately from Git. This establishes a working SEARCHING path, not a
+working locked-target planner or an armable Thor deployment. The patched Hokuyo
+driver and ROS interfaces remain on the existing computer.
 
 ### How this repository would run on Thor
 
-The recommended first port moves only `real_robot/inference_server.py` and its CUDA
+The implemented first port moves only `real_robot/inference_server.py` and its CUDA
 models to Thor. Keep `real_robot/ridgeback_ros2_node.py`, the 20 Hz motion gate, ROS
 sensor drivers, E-stop, deadman and `/cmd_vel` on the present Ridgeback computer. The
 bridge already has an `inference_host` parameter, so it can send its JPEG request to
 Thor and receive the target and waypoint response. Depth geometry and command fusion
-then remain next to the sensors and motor safety gate. This is a proposed topology;
-the current deployment runs both processes on the x86 host over loopback.
+then remain next to the sensors and motor safety gate. This topology has passed the
+no-person dry-run, while the current armable deployment remains on the x86 host.
 
 First-port inventory:
 
@@ -295,27 +301,43 @@ and the active prompt; it returns target state, box, waypoint/command proposal a
 diagnostic target image. The existing ROS bridge keeps depth localization, target
 fusion, obstacle checks and final velocity publication.
 
-This split is **not yet a configuration-only switch**. `inference_server.py` rejects
-every non-loopback client even when bound to another address, and
-`start_ridgeback.sh` always starts a local server and waits for port 18765 on
-`127.0.0.1`. Before a networked trial, add an explicit trusted-peer check to the
-server, split the launcher into server-only and bridge-only modes, set
-`inference_host` to Thor's fixed address, and keep the socket on an isolated robot
-network. The current length-prefixed JSON/base64-JPEG socket has no authentication or
-encryption. Do not expose it to a general network. Check that delayed replies cannot
-revive a stale frame, and test disconnects, reconnects, and the existing inference
-freshness stop with injected delay and packet loss. The bridge's `socket_timeout` is
-5 s while `inference_timeout` is 1.5 s; the 20 Hz safety timer must continue to stop
-output during any blocked network read.
+The split is now project-specific launch configuration. `start_inference_thor.sh`
+binds only to Thor's robot-network address and accepts only the Ridgeback source IP.
+`start_ridgeback_thor.sh` starts just the existing ROS bridge in dry-run and sets
+`inference_host` to Thor. `start_ridgeback.sh` continues to default to local inference
+for rollback. Remote arming is rejected unless the operator explicitly sets
+`OMTRACKVLA_ALLOW_REMOTE_ARM=1` after the remaining verification gates pass. The
+length-prefixed JSON/base64-JPEG socket has no authentication or
+encryption, so port 18765 must remain on the dedicated robot network. The bridge now
+rejects a response if the source camera frame is older than `camera_timeout`; its
+existing safety gate also checks inference freshness. A dry-run with a held deadman
+confirmed that stopping Thor changed the gate reason to
+`dry_run:inference_disconnected` while the 20 Hz host timer continued. Delay and
+reconnect tests remain.
 
 Build the inference environment natively on Arm64. `run_local.sh` points at the local
 `.conda-env`, whose current binaries are x86_64, and upstream's Python 3.9/Habitat
-setup is not a Thor deployment recipe. Establish a compatible JetPack, Python,
-CUDA-enabled PyTorch, torchvision, Transformers, Ultralytics and OpenCV combination;
-verify CUDA imports and model loading before integrating ROS. Transfer the separately
-stored `models/` weights; Git alone does not provide them. The current model files
-and numerical behavior must be checked on Thor, especially BF16/FP16 inference and
-the custom CUDA preprocessing path.
+setup is not a Thor deployment recipe. The attached Thor's Python 3.12 environment
+has imported CUDA PyTorch, torchvision, Transformers, Ultralytics, and OpenCV; it
+loaded all real model files and answered an empty-frame request. Numerical behavior
+on locked-person frames, BF16/FP16 planner outputs, and custom CUDA preprocessing
+still require replay comparison with the RTX baseline.
+
+The first live split dry-run on 2026-09-28 captured 117 no-person `SEARCHING`
+frames over approximately 39 seconds: target-view cadence `3.007 Hz`, reported
+inference median/p95 `43.133/44.577 ms`, bridge pipeline median/p95
+`47.117/48.755 ms`, and 20 Hz control interval median/p95/max
+`50.001/50.255/50.932 ms` over 777 intervals. Every motion-gate reason was
+`dry_run:deadman_not_held`. The prior x86 SEARCHING capture had inference
+`22.666/24.730 ms` and pipeline `24.641/27.394 ms`, but the recordings were made
+at different moments and Thor stage profiling was not enabled. These values do not
+show a speedup; they also do not measure target lock, grounding, or planner work.
+
+In a second dry-run, the deadman was published at 10 Hz and the Thor server was
+stopped. The bridge recorded 269 `dry_run:inference_disconnected` control ticks;
+the maximum observed control interval was `52.744 ms`. This verifies a disconnect
+stop reason with motor output disabled. It does not verify a physical stop distance
+or recovery after Thor restarts.
 
 Bring-up order: (1) load all models and run a fixed offline frame replay on Thor;
 (2) connect the existing bridge to Thor in `dry_run: true` and compare target IDs,
@@ -394,6 +416,17 @@ and [ROS 2 Jazzy supported platforms](https://www.openrobotics.org/blog/2024/5/r
 
 ### 2026-09-28
 
+- Implemented the Ridgeback-to-Thor inference split with a single allowed client,
+  separate server and bridge launchers, and rejection of late camera-frame responses.
+  Confirmed the attached Thor IP via mDNS/SSH and its JetPack 7.0 Arm64 platform;
+  installed a dedicated CUDA PyTorch environment and copied project weights.
+- Verified model startup, a real empty-frame request, and a 117-frame ROS dry-run
+  across the network. SEARCHING held 3.007 Hz and the host control timer stayed
+  within 50.932 ms; median inference and bridge pipeline times were 43.133 and
+  47.117 ms. Planner and armable behavior remain unverified. No Thor speedup claimed.
+- Stopped Thor during a second dry-run with a held deadman. The bridge recorded
+  `dry_run:inference_disconnected` and retained 20 Hz timing (52.744 ms maximum).
+  Recovery and physical stopping still need verification.
 - Listed the exact first-port files, model weights, and CPU/GPU work that move to
   Thor versus the ROS, sensor and motor-safety work retained on the current host.
 - Traced the actual launch path for Thor: first move the CUDA inference process,
@@ -471,3 +504,16 @@ and [ROS 2 Jazzy supported platforms](https://www.openrobotics.org/blog/2024/5/r
   replace architecture-specific extensions, and benchmark the complete pipeline on
   the actual Thor power profile. Keep the current RTX 5060 deployment until those
   compatibility, latency, VRAM, and safety-timing gates pass.
+
+### 2026-09-28 (placement documented, not changed)
+
+- The current placement is now drawn rather than only described: see `System
+  architecture` in `docs/RIDGEBACK_DEPLOYMENT.md`. The deployment diagram shows
+  inference on Thor (`192.168.131.51`) and camera, depth, LiDAR, E-stop, deadman,
+  depth localisation, command fusion, the 20 Hz gate and `/cmd_vel` on the Ridgeback
+  computer (`192.168.131.1`), with the `18765` JSON socket between them.
+- The module map names, per module, the machine it runs on and whether it can stop the
+  robot. `gpu_ops.py` is recorded there as not wired into the runtime path, consistent
+  with the measurement in this plan that the CUDA colour path is slower than OpenCV.
+- No placement decision changed and no new measurement was taken in this entry. It is
+  documentation of the placement already in effect.

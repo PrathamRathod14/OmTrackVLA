@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Loopback-only OmTrackVLA inference service for the ROS 2 Ridgeback bridge."""
+"""OmTrackVLA inference service for the ROS 2 Ridgeback bridge."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import argparse
 import base64
 from collections import deque
 import json
+import ipaddress
 import os
 from pathlib import Path
 import socket
@@ -258,6 +259,11 @@ def decode_request_image(request: dict) -> np.ndarray:
 
 
 def serve(args: argparse.Namespace) -> None:
+    # A remote bind is permitted only for one explicitly named Ridgeback address.
+    # Keep loopback as the default for existing single-computer deployments.
+    allowed_client = str(ipaddress.IPv4Address(args.allowed_client))
+    if allowed_client == "0.0.0.0":
+        raise ValueError("--allowed-client must name one Ridgeback IPv4 address")
     profile = PerfLog("inference")
     model = None if args.dummy else OmTrackInference(
         PROJECT_DIR,
@@ -282,7 +288,7 @@ def serve(args: argparse.Namespace) -> None:
     print(json.dumps({"status": "ready", "host": args.host, "port": args.port, "dummy": args.dummy}), flush=True)
     while True:
         connection, address = server.accept()
-        if address[0] not in ("127.0.0.1", "::1"):
+        if address[0] != allowed_client:
             connection.close()
             continue
         connection.settimeout(args.socket_timeout)
@@ -339,6 +345,8 @@ def serve(args: argparse.Namespace) -> None:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--allowed-client", default="127.0.0.1",
+                        help="Only accept connections from this Ridgeback IPv4 address")
     parser.add_argument("--port", type=int, default=18765)
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--history", type=int, default=31)

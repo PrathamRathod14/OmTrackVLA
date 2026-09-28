@@ -59,6 +59,10 @@ working:
   `18765`; uploads one RGB tensor for shared CUDA resize/normalization by DINOv3 and
   SigLIP, maintains 31 coarse history frames on CUDA, and returns the raw eight-waypoint path,
   plus the target-manager state and RGB trajectory-consistency result for the same frame.
+  The locally added Thor split can run this process under Python 3.12/CUDA on Arm64,
+  bound to `192.168.131.51` and allowing only the Ridgeback's `192.168.131.1` IP.
+  This is a deployment option for the local integration; upstream OmTrackVLA is
+  unchanged. Loopback remains the default on the x86 host.
 - `perf_log.py`, `summarize_perf.py`: opt-in JSONL stage timing and read-only summary
   for dry-run baseline captures. Profiling synchronizes CUDA at stage boundaries and
   the ROS bridge refuses armable mode while it is enabled.
@@ -84,7 +88,15 @@ working:
 - `ridgeback_omtrack.rviz`: namespaced TF, Ridgeback model, camera, merged LiDAR, raw
   OmTrackVLA trajectory, and annotated Target Tracker image display.
 - `start_ridgeback.sh`: controller/inference launcher; dry-run unless
-  `OMTRACKVLA_ARM_OUTPUT=1`; refuses to start a duplicate controller.
+  `OMTRACKVLA_ARM_OUTPUT=1`; refuses to start a duplicate controller. With
+  `OMTRACKVLA_INFERENCE_HOST` set to Thor, it starts only the local ROS bridge.
+- `start_inference_thor.sh`: runs the project inference process on the attached Thor
+  using its separate Arm64 CUDA environment and a single allowed Ridgeback IP.
+- `requirements_thor.txt`: direct Python dependency pins for this project's
+  JetPack 7.0/Python 3.12 inference environment. It does not apply to other Thor
+  projects or to the upstream Habitat training setup.
+- `start_ridgeback_thor.sh`: dry-run by default, connects the host ROS bridge to the
+  Thor server at `192.168.131.51` while retaining sensor and motor safety locally.
 - `start_ridgeback_rviz.sh`: namespaced RViz launcher.
 - `start_ridgeback_all.sh`: supervised one-terminal armable launcher. It requires the
   operator to type `ENABLE`, runs the deadman in the foreground, and cleans up on
@@ -308,6 +320,29 @@ physical E-stop reachable. Press Ctrl+C to stop the foreground deadman and shut 
 the launcher processes.
 
 ## Change log
+
+### 2026-09-28 (project-specific Thor inference split)
+
+- Identified the attached `nvidia-thor-r100-0160.local` at `192.168.131.51` by mDNS
+  and confirmed Arm64/JetPack 7.0 by SSH. The Ridgeback host routes to it from
+  `192.168.131.1`.
+- Copied this project's code and model weights to `/home/robot/dev/omtrackvla` on
+  Thor; built a separate Python 3.12 environment with CUDA PyTorch 2.10.0+cu130.
+  Model startup and an empty-frame inference request succeeded on Thor. The x86
+  runtime and all other Thor projects were not changed.
+- Added a single-client remote bind, separate Thor inference and host bridge launch
+  paths, and stale-camera-response rejection. ROS, depth fusion, E-stop, LiDAR,
+  deadman, and the 20 Hz motor safety gate remain on the Ridgeback computer. Remote
+  arming requires a second explicit `OMTRACKVLA_ALLOW_REMOTE_ARM=1` opt-in after
+  the replay, timing, and physical safety gates pass.
+- A 39-second Thor split dry-run produced 117 SEARCHING frames at 3.007 Hz and
+  777 control intervals (50.932 ms maximum); motor output stayed disabled. The
+  person-locked planner, reconnect recovery, and armable safety equivalence remain
+  unverified. This does not establish an end-to-end speed improvement.
+- A second dry-run published the deadman at 10 Hz, then stopped the Thor server.
+  The host bridge recorded 269 `dry_run:inference_disconnected` ticks with a
+  52.744 ms maximum control interval. This checks the disconnect gate without
+  commanding physical motion. The complete local test suite has 62 passing tests.
 
 ### 2026-09-28 (opt-in dry-run pipeline instrumentation)
 
@@ -846,3 +881,21 @@ the launcher processes.
   descriptor is later replaced by a learned re-identification model, where the work
   becomes one batched forward pass instead of thirty small kernels and the placement
   argument reverses. No safety, identity, geometry or motion threshold was changed.
+
+### 2026-09-28 (architecture diagrams)
+
+- Added a `System architecture` section to `docs/RIDGEBACK_DEPLOYMENT.md` (linked as
+  `real_robot/README.md`), ahead of the Thor split section. It documents current
+  behavior only; no code, threshold, rate, or safety configuration was changed.
+- Four Mermaid diagrams: the two-machine deployment map with the `18765` socket
+  between Thor and the Ridgeback computer; one frame's journey through the 3 Hz
+  detection gate, the 2 Hz planner and the 20 Hz safety gate; the target state
+  machine; and the ordered motion gate.
+- Added a module map table naming, for each runtime module, which machine it runs on
+  and whether it can stop the robot. It records explicitly that `gpu_ops.py` is not
+  wired into the runtime path, and separates the trial-time modules from tooling
+  (`evaluate_offline.py`, `export_bag_frames.py`, `calibrate_camera_mount.py`,
+  `hokuyo_scip_reset.py`, the benchmarks and `summarize_perf.py`).
+- The diagrams state the invariant the design depends on: the safety gate samples the
+  planner rather than being called by it, so a hung or disconnected inference server
+  cannot hold the robot in motion.

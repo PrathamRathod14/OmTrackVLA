@@ -4,8 +4,10 @@ This directory contains documentation for the local Clearpath Ridgeback deployme
 The repository's root `README.md` remains the upstream OmTrackVLA introduction and
 setup guide.
 
-- [`RIDGEBACK_DEPLOYMENT.md`](RIDGEBACK_DEPLOYMENT.md): operator guide covering
-  startup, observation, target selection, safety, testing, and controlled arming.
+- [`RIDGEBACK_DEPLOYMENT.md`](RIDGEBACK_DEPLOYMENT.md): system architecture diagrams
+  (module map, per-frame data flow, target state machine, motion gate) followed by the
+  operator guide covering startup, observation, target selection, safety, testing, and
+  controlled arming.
 - [`PROJECT_CONTEXT.md`](PROJECT_CONTEXT.md): living engineering context, component
   boundaries, current configuration, verified behavior, limitations, and change log.
 - [`COMPUTE_PLACEMENT_PLAN.md`](COMPUTE_PLACEMENT_PLAN.md): maintained CPU/GPU

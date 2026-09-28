@@ -48,25 +48,25 @@ class SafetyState:
     candidate: Optional[Sequence[float]]
 
 
-def _fresh(now: float, stamp: Optional[float], timeout: float) -> bool:
+def is_fresh(now: float, stamp: Optional[float], timeout: float) -> bool:
     return stamp is not None and 0.0 <= now - stamp <= timeout
 
 
 def evaluate(config: SafetyConfig, state: SafetyState, now: float) -> Tuple[bool, str, Command]:
     stop: Command = (0.0, 0.0, 0.0)
-    if not state.enabled or not _fresh(now, state.enable_stamp, config.enable_timeout):
+    if not state.enabled or not is_fresh(now, state.enable_stamp, config.enable_timeout):
         return False, "deadman_not_held", stop
     if config.require_estop and not state.estop_seen:
         return False, "estop_state_missing", stop
-    if config.require_estop and not _fresh(now, state.estop_stamp, config.estop_timeout):
+    if config.require_estop and not is_fresh(now, state.estop_stamp, config.estop_timeout):
         return False, "estop_state_stale", stop
     if state.estop_seen and state.estop_active:
         return False, "estop_active", stop
-    if not _fresh(now, state.camera_stamp, config.camera_timeout):
+    if not is_fresh(now, state.camera_stamp, config.camera_timeout):
         return False, "camera_stale", stop
     if not state.inference_connected:
         return False, "inference_disconnected", stop
-    if not _fresh(now, state.inference_stamp, config.inference_timeout):
+    if not is_fresh(now, state.inference_stamp, config.inference_timeout):
         return False, "inference_stale", stop
     if config.require_target and not state.target_valid:
         return False, "target_not_locked", stop
@@ -86,7 +86,7 @@ def evaluate(config: SafetyConfig, state: SafetyState, now: float) -> Tuple[bool
     )
     reason = "ready"
     if config.require_scan:
-        if not _fresh(now, state.scan_stamp, config.scan_timeout):
+        if not is_fresh(now, state.scan_stamp, config.scan_timeout):
             return False, "scan_stale", stop
         if state.obstacle_distance is None:
             return False, "scan_has_no_valid_ranges", stop

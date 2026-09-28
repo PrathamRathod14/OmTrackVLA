@@ -5,6 +5,17 @@ PROJECT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 ROS_SETUP="/opt/ros/jazzy/setup.bash"
 ROBOT_NAMESPACE="${ROBOT_NAMESPACE:-}"
 CAMERA_TOPIC="${CAMERA_TOPIC:-}"
+INFERENCE_HOST="${OMTRACKVLA_INFERENCE_HOST:-127.0.0.1}"
+INFERENCE_PORT="${OMTRACKVLA_INFERENCE_PORT:-18765}"
+REMOTE_INFERENCE=false
+if [ "$INFERENCE_HOST" != "127.0.0.1" ]; then
+    REMOTE_INFERENCE=true
+fi
+if [ "$REMOTE_INFERENCE" = true ] && [ "${OMTRACKVLA_ARM_OUTPUT:-0}" = "1" ] && \
+   [ "${OMTRACKVLA_ALLOW_REMOTE_ARM:-0}" != "1" ]; then
+    echo "Remote inference has only been verified in dry-run. Set OMTRACKVLA_ALLOW_REMOTE_ARM=1 only after the Thor replay, timing, and safety gates pass." >&2
+    exit 2
+fi
 
 if [ -z "$ROBOT_NAMESPACE" ]; then
     echo "Set ROBOT_NAMESPACE to the Ridgeback namespace, for example r100_0001." >&2
@@ -35,7 +46,12 @@ DUMMY_ARG=""
 if [ "${OMTRACKVLA_ARM_OUTPUT:-0}" = "1" ]; then
     DRY_RUN=false
 fi
-if [ "${OMTRACKVLA_DUMMY_INFERENCE:-0}" = "1" ]; then
+if [ "$REMOTE_INFERENCE" = true ] && [ "${OMTRACKVLA_DUMMY_INFERENCE:-0}" = "1" ]; then
+    echo "Dummy inference must be started on Thor, not requested by the Ridgeback bridge." >&2
+    exit 2
+elif [ "$REMOTE_INFERENCE" = true ]; then
+    DUMMY_ARG=""
+elif [ "${OMTRACKVLA_DUMMY_INFERENCE:-0}" = "1" ]; then
     DUMMY_ARG="--dummy"
     if [ "${OMTRACKVLA_ARM_OUTPUT:-0}" = "1" ]; then
         echo "Refusing to arm motor output while dummy inference is enabled." >&2
@@ -63,38 +79,42 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 cd "$PROJECT_DIR"
-# Model construction briefly saturates CPU/I/O. Keep it below robot drivers and
-# cap CPU thread pools; CUDA still performs the steady-state model computation.
-INFERENCE_COMMAND=(nice -n "${OMTRACKVLA_NICE:-5}")
-if [ -n "${OMTRACKVLA_CPUSET:-}" ]; then
-    INFERENCE_COMMAND=(taskset -c "$OMTRACKVLA_CPUSET" "${INFERENCE_COMMAND[@]}")
+if [ "$REMOTE_INFERENCE" = false ]; then
+    # Model construction briefly saturates CPU/I/O. Keep it below robot drivers and
+    # cap CPU thread pools; CUDA still performs the steady-state model computation.
+    INFERENCE_COMMAND=(nice -n "${OMTRACKVLA_NICE:-5}")
+    if [ -n "${OMTRACKVLA_CPUSET:-}" ]; then
+        INFERENCE_COMMAND=(taskset -c "$OMTRACKVLA_CPUSET" "${INFERENCE_COMMAND[@]}")
+    fi
+    OMP_NUM_THREADS="${OMTRACKVLA_CPU_THREADS:-4}" \
+    MKL_NUM_THREADS="${OMTRACKVLA_CPU_THREADS:-4}" \
+    TOKENIZERS_PARALLELISM=false \
+    "${INFERENCE_COMMAND[@]}" \
+    "$PROJECT_DIR/run_local.sh" python "$PROJECT_DIR/real_robot/inference_server.py" $DUMMY_ARG &
+    INFERENCE_PID=$!
 fi
-OMP_NUM_THREADS="${OMTRACKVLA_CPU_THREADS:-4}" \
-MKL_NUM_THREADS="${OMTRACKVLA_CPU_THREADS:-4}" \
-TOKENIZERS_PARALLELISM=false \
-"${INFERENCE_COMMAND[@]}" \
-"$PROJECT_DIR/run_local.sh" python "$PROJECT_DIR/real_robot/inference_server.py" $DUMMY_ARG &
-INFERENCE_PID=$!
 
 SERVER_READY=false
 for _ in $(seq 1 300); do
-    if ! kill -0 "$INFERENCE_PID" 2>/dev/null; then
+    if [ "$REMOTE_INFERENCE" = false ] && ! kill -0 "$INFERENCE_PID" 2>/dev/null; then
         wait "$INFERENCE_PID"
         exit 1
     fi
-    if /usr/bin/python3 -c 'import socket; s=socket.create_connection(("127.0.0.1",18765),0.1); s.close()' 2>/dev/null; then
+    if /usr/bin/python3 -c 'import socket,sys; from real_robot.protocol import send_message,receive_message; s=socket.create_connection((sys.argv[1],int(sys.argv[2])),0.2); s.settimeout(0.5); send_message(s,{"request_id":0,"prompt":"__probe__","encoding":"jpeg"}); r=receive_message(s); s.close(); sys.exit(0 if r.get("request_id")==0 and r.get("error")=="ValueError: image_b64 is missing" else 1)' \
+        "$INFERENCE_HOST" "$INFERENCE_PORT" 2>/dev/null; then
         SERVER_READY=true
         break
     fi
     sleep 0.1
 done
 if [ "$SERVER_READY" != true ]; then
-    echo "The OmTrackVLA inference server did not become ready." >&2
+    echo "The OmTrackVLA inference server at $INFERENCE_HOST:$INFERENCE_PORT did not become ready." >&2
     exit 1
 fi
 
 echo "Namespace: /$ROBOT_NAMESPACE"
 echo "Camera: $CAMERA_TOPIC"
+echo "Inference: $INFERENCE_HOST:$INFERENCE_PORT"
 echo "Output mode: $([ "$DRY_RUN" = true ] && echo DRY-RUN || echo ARMABLE)"
 echo "Prompt topic: /$ROBOT_NAMESPACE/omtrackvla/prompt"
 echo "Deadman topic: /$ROBOT_NAMESPACE/omtrackvla/enable"
@@ -108,5 +128,7 @@ echo "Deadman topic: /$ROBOT_NAMESPACE/omtrackvla/enable"
     -p "estop_topic:=${ESTOP_TOPIC:-platform/emergency_stop}" \
     -p "cmd_vel_topic:=${CMD_VEL_TOPIC:-cmd_vel}" \
     -p "camera_compressed:=$CAMERA_COMPRESSED" \
+    -p "inference_host:=$INFERENCE_HOST" \
+    -p "inference_port:=$INFERENCE_PORT" \
     -p "dry_run:=$DRY_RUN" \
     "$@"
