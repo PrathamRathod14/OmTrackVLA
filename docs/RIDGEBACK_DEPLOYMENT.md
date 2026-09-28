@@ -130,7 +130,9 @@ Ridgeback's `192.168.131.0/24` robot network. The Ridgeback computer uses
 `192.168.131.1` as its source address to reach it (`ip route get 192.168.131.51`).
 SSH confirmed Arm64 and JetPack 7.0, and the Thor Python environment confirmed a CUDA
 tensor operation on NVIDIA Thor. A real model load and a no-person live dry-run also
-passed; locked-target planner behavior is still awaiting a matched replay.
+passed. A fixed offline one-person replay reached target lock and the planner on
+both Thor and RTX with the same 10 valid trajectories; live locked-person behavior
+is still awaiting verification.
 
 Only inference moves: Thor runs `inference_server.py`, target perception, model code,
 and the `models/` weights. The Ridgeback computer continues to run ROS 2 Jazzy,
@@ -181,7 +183,7 @@ The first dry-run received 117 no-person frames at 3.007 Hz with a 50.932 ms max
 control interval. With the deadman published during a second dry-run, stopping the
 Thor server produced `dry_run:inference_disconnected` while the 20 Hz host control
 timer continued. Verify target lock, the 2 Hz planner, LiDAR freshness, reconnect
-behavior, and matched replay before any armable trial. Keep the
+behavior, and replay on moving Ridgeback frames before any armable trial. Keep the
 supervised armable launch on the current host until the Thor path passes the replay,
 timing, and physical safety gates in `docs/COMPUTE_PLACEMENT_PLAN.md`. The remote
 launcher rejects `OMTRACKVLA_ARM_OUTPUT=1` unless the operator also sets

@@ -337,12 +337,17 @@ the launcher processes.
   the replay, timing, and physical safety gates pass.
 - A 39-second Thor split dry-run produced 117 SEARCHING frames at 3.007 Hz and
   777 control intervals (50.932 ms maximum); motor output stayed disabled. The
-  person-locked planner, reconnect recovery, and armable safety equivalence remain
-  unverified. This does not establish an end-to-end speed improvement.
+  live person-locked planner, reconnect recovery, and armable safety equivalence
+  remain unverified. This does not establish an end-to-end speed improvement.
 - A second dry-run published the deadman at 10 Hz, then stopped the Thor server.
   The host bridge recorded 269 `dry_run:inference_disconnected` ticks with a
   52.744 ms maximum control interval. This checks the disconnect gate without
   commanding physical motion. The complete local test suite has 62 passing tests.
+- A fixed 12-frame offline replay of one cropped real-person image reached target
+  lock and the planner on Thor. Thor and RTX both locked track ID 1 on frame 3,
+  produced 10 valid trajectories, and matched all states and decisions; maximum
+  absolute command-component difference was 0.003344. This narrow replay does not
+  establish live planner rate, moving-person identity, depth fusion, or motor safety.
 
 ### 2026-09-28 (opt-in dry-run pipeline instrumentation)
 

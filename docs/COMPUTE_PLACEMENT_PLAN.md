@@ -255,9 +255,10 @@ acceptable full-pipeline latency and memory.
 
 ## Jetson AGX Thor migration assessment
 
-Status: split inference port implemented and tested in a no-person dry-run on Thor;
-locked-target, planner, network-delay/reconnect, and armable equivalence are not yet
-verified. The chosen first port retains the x86/RTX host for ROS and motor safety,
+Status: split inference port implemented, tested in a no-person live dry-run, and
+checked with a fixed offline person replay on Thor. Live locked-target cadence,
+network-delay/reconnect, and armable equivalence are not yet verified. The chosen
+first port retains the x86/RTX host for ROS and motor safety,
 while Thor runs model inference over the dedicated robot network. A later full move
 would replace the present x86 host plus discrete RTX 5060 with an Arm64 system that
 has an integrated NVIDIA GPU. It does not replace CUDA. The neural models,
@@ -271,8 +272,8 @@ on the attached Thor and processes Ridgeback camera frames. Thor is
 Ridgeback source address is `192.168.131.1`. A separate Python 3.12 environment
 with CUDA PyTorch 2.10.0+cu130, torchvision 0.25.0+cu130, and matching project
 dependencies was built at `/home/robot/dev/omtrackvla/.conda-env`. The weights
-were copied separately from Git. This establishes a working SEARCHING path, not a
-working locked-target planner or an armable Thor deployment. The patched Hokuyo
+were copied separately from Git. This establishes a working SEARCHING path and an
+offline locked-target planner path, not an armable Thor deployment. The patched Hokuyo
 driver and ROS interfaces remain on the existing computer.
 
 ### How this repository would run on Thor
@@ -321,7 +322,18 @@ setup is not a Thor deployment recipe. The attached Thor's Python 3.12 environme
 has imported CUDA PyTorch, torchvision, Transformers, Ultralytics, and OpenCV; it
 loaded all real model files and answered an empty-frame request. Numerical behavior
 on locked-person frames, BF16/FP16 planner outputs, and custom CUDA preprocessing
-still require replay comparison with the RTX baseline.
+were checked on a short fixed replay. Wider scenes and live locked-person behavior
+still require comparison with the RTX baseline.
+
+The fixed offline replay repeated one cropped, real-person image for 12 frames with
+the prompt `Follow the person.`. Both Thor and RTX locked track ID 1 on frame 3,
+kept it locked for 10 frames, and marked the same 10 trajectories valid. All 12
+target states, target reasons, track IDs, trajectory-valid decisions, and trajectory
+reasons matched. Maximum absolute command-component difference was `0.003344`;
+mean absolute difference was `0.001672`. This confirms a basic Thor planner path
+and close numerical agreement for this one input, not identity behavior in a moving
+scene. The replay runs model code without ROS depth, LiDAR, the network bridge, or
+motor control. Its mean frame times are not a full-pipeline speed comparison.
 
 The first live split dry-run on 2026-09-28 captured 117 no-person `SEARCHING`
 frames over approximately 39 seconds: target-view cadence `3.007 Hz`, reported
@@ -423,7 +435,11 @@ and [ROS 2 Jazzy supported platforms](https://www.openrobotics.org/blog/2024/5/r
 - Verified model startup, a real empty-frame request, and a 117-frame ROS dry-run
   across the network. SEARCHING held 3.007 Hz and the host control timer stayed
   within 50.932 ms; median inference and bridge pipeline times were 43.133 and
-  47.117 ms. Planner and armable behavior remain unverified. No Thor speedup claimed.
+  47.117 ms. Live planner and armable behavior remain unverified. No Thor speedup claimed.
+- Ran the same 12-frame offline person replay on Thor and RTX. Both locked the same
+  track on frame 3 with identical state and trajectory-valid decisions on all frames;
+  maximum command-component difference was 0.003344. This is a narrow model-path
+  comparison, not live planner timing or a moving-scene identity test.
 - Stopped Thor during a second dry-run with a held deadman. The bridge recorded
   `dry_run:inference_disconnected` and retained 20 Hz timing (52.744 ms maximum).
   Recovery and physical stopping still need verification.
