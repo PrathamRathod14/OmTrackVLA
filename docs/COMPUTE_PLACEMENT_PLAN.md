@@ -373,6 +373,19 @@ compressed RGB frame and prompt to Thor; Thor returns target state, annotated im
 raw waypoints and provenance. Ridgeback combines that result with its local depth
 and safety data. An all-on-Thor ROS/motor deployment is not implemented.
 
+The Thor CPU/GPU split is **within one `inference_server.py` Python process**, not
+two services or a hardware partition. The CPU receives JSON, decodes JPEG with
+OpenCV, and runs the tracking/identity logic. PyTorch models are placed on `cuda`
+(`.to(self.device)` or Ultralytics `device=self.device`), so their tensor operations
+execute on Thor's GPU. Detector boxes return through `.cpu().numpy()` for BoT-SORT
+and HSV checks. For a locked target, `torch.from_numpy` starts with a CPU RGB frame;
+`resize_rgb_tensor_for_vision` explicitly uploads it with `.to(device)`, then CUDA
+does shared resize, vision encoding, token pooling and waypoint planning. The small
+trajectory returns through `.detach().float().cpu()` for JSON serialization. There
+is no custom CPU/GPU scheduler, dedicated CPU core assignment, zero-copy path, or
+separate CPU/GPU worker service. The Thor launcher caps OpenMP/MKL threads at four;
+the source code and framework decide the individual tensor placements.
+
 ### How this repository would run on Thor
 
 The implemented first port moves only `real_robot/inference_server.py` and its CUDA
@@ -556,6 +569,10 @@ and [ROS 2 Jazzy supported platforms](https://www.openrobotics.org/blog/2024/5/r
   inference service and tracking logic. Ridgeback retains ROS, depth/fusion and
   motor safety. This changes documentation only; the next action remains a matched
   live RTX/Thor dry-run comparison before considering remote arming.
+- Traced the in-process handoffs on Thor: model `.to(cuda)` placement, explicit RGB
+  upload, detector/result copies back to CPU, and CPU JSON/OpenCV/tracker work. The
+  implementation uses one inference process and no custom CPU/GPU scheduler or
+  zero-copy mechanism; the measured full-pipeline gate remains unchanged.
 - Audited the live host placement: the armable bridge was connected to the local
   loopback inference server, whose RTX process occupied `5,368 MiB`; Thor's separate
   server was listening without a client. Clarified that the implemented Thor split
