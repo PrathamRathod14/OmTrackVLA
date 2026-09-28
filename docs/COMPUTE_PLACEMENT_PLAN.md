@@ -8,9 +8,10 @@ every CPU/GPU placement, rate, or pipeline-scheduling discussion and implementat
 
 ## Goal and constraints
 
-Use the RTX 5060 for work that benefits from wide parallel execution while keeping the
-20 Hz motion gate independent, predictable, and able to stop the robot when inference
-is late or unavailable.
+Use the RTX 5060 in the active local run, or Thor CUDA in the inference split, for
+work that benefits from wide parallel execution. Keep the Ridgeback computer's 20 Hz
+motion gate independent, predictable, and able to stop the robot when inference is
+late or unavailable.
 
 Placement changes must satisfy all of these constraints:
 
@@ -45,6 +46,10 @@ enabled because they compete for the eight CPU cores.
 
 ## Current placement
 
+The CPU/CUDA entries below describe stages of the active local RTX run. In the
+implemented Thor split, the inference-server stages move together to Thor as shown in
+the host-placement table below; the ROS bridge stages remain on Ridgeback.
+
 | Pipeline stage | Current execution | Evidence and decision |
 | --- | --- | --- |
 | RealSense, LiDAR, E-stop and ROS 2 callbacks | CPU | Linux device drivers, DDS, ROS executors and message handling require host execution. Keep on CPU. |
@@ -67,6 +72,36 @@ enabled because they compete for the eight CPU cores.
 | Command fusion and rate limiting | CPU | Small control calculations at the ROS layer. Keep on CPU. |
 | Directional LiDAR, freshness, E-stop and motion gate | CPU at 20 Hz | This must remain independent of CUDA load and failure. Keep on CPU. |
 | Velocity publication and status/visualization topics | CPU | ROS and operating-system I/O. Keep on CPU. |
+
+### Verified active host placement at 2026-09-28T14:54Z
+
+The running `start_ridgeback_all.sh` has an armable Ridgeback ROS bridge pointed at
+`127.0.0.1:18765`, a local `inference_server.py`, and local RViz. `ss` showed an
+established loopback connection between that bridge and server. The RTX 5060 listed
+the inference Python process with `5,368 MiB` of GPU memory. At the sampled status,
+the physical E-stop was active, the target state was `LOST`, and the last command was
+zero. This is the **local RTX run**, not a Thor inference run.
+
+Thor independently had an `inference_server.py` listening on
+`192.168.131.51:18765`, with no established client socket at that snapshot. It was
+loaded but was not supplying frames to the running ROS bridge. Running a server on
+Thor alone does not switch the bridge; the bridge's `inference_host` determines which
+server processes camera frames. No matched live RTX-versus-Thor performance comparison
+was measured in this placement audit.
+
+| Work | Active local run | Implemented Thor split when selected |
+| --- | --- | --- |
+| Camera, compressed depth, LiDAR, E-stop and deadman ROS inputs | Ridgeback computer | Ridgeback computer |
+| JPEG selection and request transport | Ridgeback bridge to loopback | Ridgeback bridge across robot network to Thor |
+| JPEG decode, YOLO and Grounding DINO models, DINOv3, SigLIP, Qwen/OmTrackVLA planner | Ridgeback inference process; neural work on RTX CUDA | Thor inference process; neural work on Thor CUDA |
+| BoT-SORT, optical flow, HSV appearance, target identity, diagnostic image encoding | Ridgeback inference CPU | Thor inference CPU |
+| Depth localization, leader/model fusion, LiDAR checks, 20 Hz safety gate and `/cmd_vel` | Ridgeback ROS bridge CPU | Ridgeback ROS bridge CPU |
+| RViz and target/status/path ROS topics | Ridgeback computer | Ridgeback computer; Thor returns the annotated image and proposed path data |
+
+Next action for a Thor comparison: stop the local armable launcher, connect the
+Ridgeback bridge to the Thor server with `start_ridgeback_thor.sh` in dry-run, and
+record a matched local-versus-Thor locked-target run. Keep the current armable path
+local until the remote cadence, reconnection, and safety gates pass.
 
 ## Verified placement experiment
 
@@ -241,6 +276,37 @@ Status: deferred.
 
 Exit gate: a labelled multi-person replay shows a material identity improvement with
 acceptable full-pipeline latency and memory.
+
+### Later all-on-Thor deployment option
+
+Status: architectural proposal only. The inference-only Thor split described below
+has been implemented and dry-run tested; moving the ROS bridge and motor safety to
+Thor has not been performed.
+
+- A full Thor deployment would replace the current x86 host and discrete RTX 5060 platform.
+  It would not replace CUDA: the neural-network workload would still run through the
+  CUDA, cuDNN, and TensorRT stack supplied by JetPack.
+- In that later design, ROS communication, depth geometry, command fusion, LiDAR
+  checks, timeouts, and motor safety would run on Thor CPU. In the implemented split,
+  these remain on the Ridgeback CPU; target identity runs in the Thor inference process.
+- Before choosing Thor, build the Python and ROS dependencies for ARM64, confirm the
+  camera and Hokuyo drivers, measure sustained power and thermals, and run the same
+  replay-equivalence, latency, freshness, and physical safety checks used here.
+- Thor's larger unified memory could remove the current 8 GB VRAM constraint, but
+  there is no matched live RTX-versus-Thor full-pipeline speed comparison yet.
+
+Proposed placement on one Thor device:
+
+- Thor GPU through CUDA: OmTrackVLA/Qwen waypoint inference, DINOv3, SigLIP,
+  Grounding DINO, YOLO, token pooling, and heavy image tensor preprocessing.
+- Thor CPU: ROS 2/DDS, camera and LiDAR callbacks, networking, JPEG handling,
+  BoT-SORT association, sparse optical flow unless a measured accelerated replacement
+  is adopted, depth geometry, target state, command fusion, timeouts, and motor safety.
+- Thor shared system memory would hold both CPU and GPU allocations. That can reduce
+  explicit host/device copies, but placement and synchronization still require
+  measurement; shared memory does not mean every task should execute on the GPU.
+- The cameras, Hokuyo scanners, E-stop, Ridgeback motor controller, and other sensors
+  remain external hardware connected to Thor through their normal interfaces.
 
 ## Acceptance and rollback rules
 
@@ -455,6 +521,11 @@ and [ROS 2 Jazzy supported platforms](https://www.openrobotics.org/blog/2024/5/r
 
 ### 2026-09-28
 
+- Audited the live host placement: the armable bridge was connected to the local
+  loopback inference server, whose RTX process occupied `5,368 MiB`; Thor's separate
+  server was listening without a client. Clarified that the implemented Thor split
+  moves the inference process, not the ROS bridge or motor safety. No new speed
+  comparison or armable Thor result was obtained.
 - Implemented the Ridgeback-to-Thor inference split with a single allowed client,
   separate server and bridge launchers, and rejection of late camera-frame responses.
   Confirmed the attached Thor IP via mDNS/SSH and its JetPack 7.0 Arm64 platform;
@@ -546,6 +617,9 @@ and [ROS 2 Jazzy supported platforms](https://www.openrobotics.org/blog/2024/5/r
   new planner preprocessing runs, so this evidence does not implicate the CUDA resize.
   The next identity work should use a saved replay to distinguish detector fragments,
   pose/occlusion effects, and HSV-gallery mismatch before thresholds are changed.
+- Recorded Jetson AGX Thor as a possible future full-platform replacement. Thor still
+  uses CUDA through JetPack. This earlier option is separate from the subsequently
+  implemented inference-only split; no speedup or armable Thor validation is claimed.
 - Considered Jetson AGX Thor as a future onboard-compute target. This would be a
   hardware and `x86_64`-to-`arm64` deployment migration, not a replacement for CUDA:
   Thor runs the neural stages through CUDA under JetPack while the ROS callbacks,

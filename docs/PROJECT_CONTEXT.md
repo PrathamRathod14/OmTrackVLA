@@ -342,6 +342,18 @@ the launcher processes.
 
 ## Change log
 
+### 2026-09-28 (live host-placement audit)
+
+- Confirmed that the active supervised run still sends Ridgeback camera frames to
+  the **local** inference server over `127.0.0.1:18765`; the RTX 5060 held that
+  process with `5,368 MiB` of GPU memory. Thor had a separate listening inference
+  server but no connected client, so it was not doing the active run's model work.
+  The sampled local status had E-stop active, target `LOST`, and zero command.
+- Clarified the implemented alternative: with `start_ridgeback_thor.sh`, target
+  perception and OmTrackVLA neural inference move to Thor, while the Ridgeback
+  computer retains ROS sensors, depth, fusion, the 20 Hz safety gate, and `/cmd_vel`.
+  A future all-on-Thor system remains a separate proposal.
+
 ### 2026-09-28 (live blue-basket recovery diagnosis)
 
 - Inspected only fresh `/r100_0160/camera/color/image_raw/compressed` and
