@@ -269,6 +269,20 @@ Hokuyo driver, and Ridgeback device interfaces have not been built or tested on 
 Therefore deployment feasibility for this repository is not yet verified, and no
 performance or safety equivalence is claimed.
 
+Potential benefits for this Ridgeback deployment, subject to a working port:
+
+| Benefit | Practical meaning | Current evidence limit |
+| --- | --- | --- |
+| Onboard integration | One compact module can host the Arm CPU and CUDA GPU instead of the present x86 host and discrete GPU. This may simplify packaging on the robot. | Power wiring, cooling, mounting, and scanner/camera connectivity still need design. |
+| Memory headroom | The 128 GB shared LPDDR5X pool can accommodate larger models, longer histories, or future learned re-identification work. | The current stack already fits in 8 GB GPU memory, so this is expansion capacity rather than a measured speed gain. |
+| Power envelope | Thor's published 40-130 W operating range may allow a smaller compute power and cooling budget. | Current complete-computer power was not measured; module ratings are not a system energy comparison. |
+| Data sharing and accelerators | Thor's coherent CPU/GPU memory and vision accelerator create options for reducing copies or moving image processing away from the CPU. | The current Python/ROS pipeline does not use Thor-specific zero-copy or PVA paths. They require code changes and end-to-end measurement. |
+
+These benefits are deployment options, not promises of faster OmTrackVLA inference or
+more reliable target identity. In the profiled SEARCHING run, JPEG decode was about
+`2.4 ms` median and the model never ran; there is no evidence yet that removing a
+CPU-to-GPU copy would materially change the full locked-person pipeline.
+
 NVIDIA lists the Jetson AGX Thor Developer Kit with a 14-core Arm CPU, Blackwell GPU,
 128 GB shared LPDDR5X, and a 40-130 W operating range. Its shared system memory is not
 equivalent to 128 GB of dedicated GPU VRAM. JetPack 7.2.1 lists Ubuntu 24.04,
@@ -306,6 +320,8 @@ Platform sources: [NVIDIA Thor specifications](https://www.nvidia.com/en-us/auto
 [NVIDIA RTX 5060 specifications](https://www.nvidia.com/en-us/geforce/graphics-cards/50-series/rtx-5060-family/),
 [JetPack releases](https://developer.nvidia.com/embedded/jetpack/downloads),
 [PyTorch Arm support for Thor](https://discuss.pytorch.org/t/does-torch-now-offically-supported-nvidia-jetson/224665/2),
+[CUDA for Tegra memory behavior](https://docs.nvidia.com/cuda/cuda-for-tegra-appnote/),
+[NVIDIA PVA SDK](https://developer.nvidia.com/embedded/pva),
 [NVIDIA on Thor shared memory](https://docs.nvidia.com/datacenter/tesla/mig-user-guide/supported-mig-profiles.html),
 and [ROS 2 Jazzy supported platforms](https://www.openrobotics.org/blog/2024/5/ros-jazzy-jalisco-released).
 
@@ -313,6 +329,9 @@ and [ROS 2 Jazzy supported platforms](https://www.openrobotics.org/blog/2024/5/r
 
 ### 2026-09-28
 
+- Documented the concrete potential benefits of a Thor port: onboard integration,
+  memory headroom, a bounded module power range, and possible copy/vision-accelerator
+  options. None is a measured improvement for the present OmTrackVLA pipeline.
 - Confirmed the Thor feasibility boundary: its CUDA/Arm64/ROS/PyTorch platform stack
   exists, but this repository's pinned inference dependencies, ROS interfaces, and
   patched scanner driver still require an on-device build and validation.
