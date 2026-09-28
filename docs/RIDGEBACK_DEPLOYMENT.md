@@ -374,7 +374,13 @@ ros2 topic echo /r100_0160/omtrackvla/target_state
 - `UNCERTAIN` / `LOST`: the target disappeared or its appearance changed. Motion stops,
   and only the original identity can be recovered; another person is never substituted.
 
-`LOST` never times out. To start a fresh search without restarting:
+`LOST` never times out. During a supervised armable run, stop the launcher with
+Ctrl+C, place the intended person and blue basket clearly in view, and restart the
+launcher. Verify the Target Tracker says `LOCKED` on that person before typing
+`ENABLE`; a stale appearance gallery can otherwise reject a correctly detected
+basket holder. Do not reset the target while an armable deadman is held, because
+reacquisition can permit motion immediately. In dry-run, a fresh search can also be
+requested without restarting:
 
 ```bash
 ros2 topic pub --once /r100_0160/omtrackvla/reset_target std_msgs/msg/Empty {}

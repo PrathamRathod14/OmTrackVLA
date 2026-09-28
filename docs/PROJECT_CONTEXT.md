@@ -298,6 +298,14 @@ but at the post-inference controller layer rather than inside upstream OmTrackVL
   person was subsequently grounded and locked as ID 34, with valid depth at `1.177 m`.
   Detector fragments, occlusion, and appearance changes have not been separated by a
   saved replay. This is a target-stability limitation, not verified reliable following.
+- In a later local RTX armable run, fresh camera and Target Tracker frames both showed
+  a striped-shirt person holding the blue basket. YOLO tracked the person as ID 28
+  (0.90 in one annotated frame), and grounding marked the blue basket, but the state
+  stayed `LOST` with `prompt_match_appearance_differs` or
+  `waiting_for_original_identity`. The stored gallery belonged to an earlier lock;
+  the prompted candidate did not meet the 0.72 appearance-recovery threshold. Across
+  24 status samples in 12 seconds, all commands stayed zero for `target_not_locked`.
+  This is an identity-recovery refusal, not absence of camera frames or person boxes.
 - Earlier live trials selected a red-shirt person over a white-shirt person, and
   grounded a maroon shirt while rejecting an incorrect brown colour description.
   These scene-specific observations do not establish general target-selection accuracy.
@@ -333,6 +341,16 @@ physical E-stop reachable. Press Ctrl+C to stop the foreground deadman and shut 
 the launcher processes.
 
 ## Change log
+
+### 2026-09-28 (live blue-basket recovery diagnosis)
+
+- Inspected only fresh `/r100_0160/camera/color/image_raw/compressed` and
+  `/r100_0160/omtrackvla/target_image` frames during a local RTX armable run.
+  The basket holder and basket were both annotated, but a new track ID failed the
+  stored-gallery appearance check and `LOST` blocked output. The operator should stop
+  the supervised launcher and begin a fresh target search with the intended person
+  visible, then verify `LOCKED` in RViz before enabling the deadman; do not reset a
+  target while an armable deadman is held. No threshold or motion gate was changed.
 
 ### 2026-09-28 (project-specific Thor inference split)
 
