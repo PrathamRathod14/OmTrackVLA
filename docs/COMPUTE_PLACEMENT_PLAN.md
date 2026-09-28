@@ -279,6 +279,22 @@ Thor and receive the target and waypoint response. Depth geometry and command fu
 then remain next to the sensors and motor safety gate. This is a proposed topology;
 the current deployment runs both processes on the x86 host over loopback.
 
+First-port inventory:
+
+| Move to Thor | Keep on the Ridgeback computer |
+| --- | --- |
+| `real_robot/inference_server.py` and its local helpers: `target_perception.py`, `protocol.py`, and `perf_log.py` | `real_robot/ridgeback_ros2_node.py` and the 20 Hz safety/motion gate |
+| Model Python code used by that process, including `open_trackvla_hf/` and `cache_gridpool.py` | ROS 2 Jazzy sensor/robot interfaces, camera/depth, Hokuyo LiDAR, E-stop, deadman and `/cmd_vel` |
+| `models/` weights: YOLO11n, Grounding DINO, DINOv3, SigLIP, Qwen3-0.6B and OmTrackVLA-0.6B (about 6.6 GB here) | `real_robot/ridgeback.yaml` safety and ROS settings, with `inference_host` pointed to Thor |
+| A newly built Arm64 Python/CUDA runtime for the inference process | The existing x86 `.conda-env` stays on its present host; its binaries are not portable to Arm64 |
+
+The inference server's CPU work (JPEG decode, BoT-SORT/optical flow, target
+selection and response encoding) also moves because it runs inside that process.
+Its neural stages still run on Thor's CUDA GPU. Thor receives selected camera JPEGs
+and the active prompt; it returns target state, box, waypoint/command proposal and
+diagnostic target image. The existing ROS bridge keeps depth localization, target
+fusion, obstacle checks and final velocity publication.
+
 This split is **not yet a configuration-only switch**. `inference_server.py` rejects
 every non-loopback client even when bound to another address, and
 `start_ridgeback.sh` always starts a local server and waits for port 18765 on
@@ -378,6 +394,8 @@ and [ROS 2 Jazzy supported platforms](https://www.openrobotics.org/blog/2024/5/r
 
 ### 2026-09-28
 
+- Listed the exact first-port files, model weights, and CPU/GPU work that move to
+  Thor versus the ROS, sensor and motor-safety work retained on the current host.
 - Traced the actual launch path for Thor: first move the CUDA inference process,
   retain ROS sensors and the 20 Hz safety gate on the current Ridgeback computer,
   and use the bridge's `inference_host` setting after adding a trusted remote peer
