@@ -11,6 +11,7 @@ motion; it only returns a fail-closed target state to the OmTrackVLA bridge.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from contextlib import nullcontext
 import math
 from pathlib import Path
 import re
@@ -313,7 +314,8 @@ class TargetPerception:
         self.last_candidates: List[Dict[str, object]] = []
 
     @torch.inference_mode()
-    def update(self, rgb: np.ndarray, prompt: str) -> PerceptionResult:
+    def update(self, rgb: np.ndarray, prompt: str, stage_timer=None) -> PerceptionResult:
+        self._stage_timer = stage_timer or (lambda _name: nullcontext())
         if prompt != self.prompt:
             self.reset()
             self.prompt = prompt
@@ -397,7 +399,8 @@ class TargetPerception:
         valid = self.state == "LOCKED" and selected is not None
         selected_box = selected["bbox"] if selected is not None else None
         person_score = float(selected["score"]) if selected is not None else None
-        annotated = self._annotate(bgr, tracks, selected, valid)
+        with self._stage_timer("target_annotation"):
+            annotated = self._annotate(bgr, tracks, selected, valid)
         return PerceptionResult(
             query=self.query,
             state=self.state,
@@ -434,18 +437,20 @@ class TargetPerception:
 
     def _track_people(self, bgr: np.ndarray) -> List[Dict[str, object]]:
         """Detect every person (not only prompt matches) and associate with BoT-SORT."""
-        result = self.person_model.predict(
-            source=bgr,
-            classes=[0],
-            conf=self.person_threshold,
-            verbose=False,
-            device=self.device,
-            imgsz=416,
-        )[0]
-        detections = result.boxes.cpu().numpy()
-        features = self._appearance_features(bgr, detections.xyxy)
-        tracks_raw = self.tracker.update(detections, img=bgr, feats=features)
-        return self._parse_tracks(tracks_raw, features)
+        with self._stage_timer("yolo_detect"):
+            result = self.person_model.predict(
+                source=bgr,
+                classes=[0],
+                conf=self.person_threshold,
+                verbose=False,
+                device=self.device,
+                imgsz=416,
+            )[0]
+            detections = result.boxes.cpu().numpy()
+        with self._stage_timer("appearance_botsort"):
+            features = self._appearance_features(bgr, detections.xyxy)
+            tracks_raw = self.tracker.update(detections, img=bgr, feats=features)
+            return self._parse_tracks(tracks_raw, features)
 
     @staticmethod
     def _appearance_features(bgr: np.ndarray, boxes: np.ndarray) -> np.ndarray:
@@ -507,6 +512,12 @@ class TargetPerception:
         return self.frame_index == 1 or self.frame_index % self.grounding_interval == 0
 
     def _select_grounded_track(
+        self, rgb: np.ndarray, tracks: List[Dict[str, object]]
+    ) -> Tuple[Optional[Dict[str, object]], str]:
+        with self._stage_timer("grounding_total"):
+            return self._select_grounded_track_impl(rgb, tracks)
+
+    def _select_grounded_track_impl(
         self, rgb: np.ndarray, tracks: List[Dict[str, object]]
     ) -> Tuple[Optional[Dict[str, object]], str]:
         if not tracks:

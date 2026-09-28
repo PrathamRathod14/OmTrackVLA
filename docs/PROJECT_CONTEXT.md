@@ -59,6 +59,9 @@ working:
   `18765`; uploads one RGB tensor for shared CUDA resize/normalization by DINOv3 and
   SigLIP, maintains 31 coarse history frames on CUDA, and returns the raw eight-waypoint path,
   plus the target-manager state and RGB trajectory-consistency result for the same frame.
+- `perf_log.py`, `summarize_perf.py`: opt-in JSONL stage timing and read-only summary
+  for dry-run baseline captures. Profiling synchronizes CUDA at stage boundaries and
+  the ROS bridge refuses armable mode while it is enabled.
 - `target_perception.py`: target manager. Grounding DINO grounds the prompt on
   initialization/recovery; all YOLO person detections (not only prompt matches) feed
   Ultralytics BoT-SORT with sparse-optical-flow camera-motion compensation; a part-based
@@ -251,6 +254,11 @@ but at the post-inference controller layer rather than inside upstream OmTrackVL
   OmTrackVLA updates after `LOCKED`. The 20 Hz safety loop remains on the ROS/CPU side.
   One clean restarted run published Target Tracker images at about `3.08 Hz`. It used
   `5,403 MiB` GPU memory with `2,344 MiB` reported free.
+- A 2026-09-28 profiled dry-run with no person in view captured 278 SEARCHING frames
+  at `3.018 Hz`. Inference median/p95 was `22.666/24.730 ms`, and the 20 Hz control
+  interval median/p95/max was `49.999/50.234/52.694 ms` with no interval over 55 ms.
+  It did not exercise Grounding DINO model inference or OmTrackVLA planning. See the
+  compute plan for stage timings and GPU sampling limits.
 - In that run, one planner-update frame took `0.418 s`; one cached-planner response
   took `0.032 s` inference and `0.048 s` total pipeline time. These are individual
   observations, not median/p95 live latency or proof of sustained planner cadence.
@@ -300,6 +308,18 @@ physical E-stop reachable. Press Ctrl+C to stop the foreground deadman and shut 
 the launcher processes.
 
 ## Change log
+
+### 2026-09-28 (opt-in dry-run pipeline instrumentation)
+
+- Added `OMTRACKVLA_PROFILE_DIR` logging for inference and ROS bridge stages, including
+  control tick intervals and stop reasons. GPU stage timing synchronizes CUDA, so
+  profiled latency is diagnostic and must be compared with a similarly profiled run.
+  Profiling is refused when `dry_run` is false.
+- Added `summarize_perf.py` and two focused profiling tests. The complete local unit
+  suite now has 61 passing tests. A no-person SEARCHING dry-run captured 278 frames
+  and 1,856 control intervals with no interval over 55 ms. Locked-person and
+  occlusion/recovery runs, CPU sampling, and Thor comparison remain pending; no motion
+  threshold or runtime placement changed.
 
 ### 2026-09-28 (repository handoff and presentation alignment)
 

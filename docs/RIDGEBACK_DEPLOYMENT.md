@@ -223,8 +223,23 @@ Review `eval/run1/annotated.mp4`, `results.csv`, and `summary.json`; any
 Run the tests with:
 
 ```bash
-./run_local.sh python -m unittest real_robot.test_safety real_robot.test_target_perception real_robot.test_target_geometry real_robot.test_gpu_ops real_robot.test_vision_gpu_preprocess
+./run_local.sh python -m unittest real_robot.test_safety real_robot.test_target_perception real_robot.test_target_geometry real_robot.test_gpu_ops real_robot.test_vision_gpu_preprocess real_robot.test_perf_log
 ```
+
+For a supervised **dry-run** timing capture, set a new profile directory before
+starting the controller. Profiling is refused in armable mode because stage-boundary
+CUDA synchronization changes inference timing:
+
+```bash
+OMTRACKVLA_PROFILE_DIR="$PWD/log/profile-$(date -u +%Y%m%dT%H%M%SZ)" \
+ROBOT_NAMESPACE=r100_0160 CAMERA_TOPIC=camera/color/image_raw/compressed \
+./real_robot/start_ridgeback.sh
+```
+
+After stopping the run, summarize its `inference.jsonl` and `bridge.jsonl` files with
+`python3 real_robot/summarize_perf.py PROFILE_DIRECTORY`. Capture GPU utilization and
+memory separately with `nvidia-smi` during the same run. The report describes the
+profiled run and must not be read as an unprofiled throughput improvement.
 
 The implementation history, upstream-versus-local component boundary, verified live
 behavior, and current operating configuration are maintained in

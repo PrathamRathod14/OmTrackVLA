@@ -314,17 +314,23 @@ class VisionFeatureCacher(nn.Module):
         return {"pixel_values": dino}, {"pixel_values": siglip}
 
     @torch.inference_mode()
-    def encode_rgb_tensor(self, rgb: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, int, int]:
+    def encode_rgb_tensor(self, rgb: torch.Tensor, stage_timer=None) -> Tuple[torch.Tensor, torch.Tensor, int, int]:
         """Encode one RGB frame after one shared CUDA resize and upload."""
-        dino_inputs, siglip_inputs = self._preprocess_rgb_tensor(rgb)
+        from contextlib import nullcontext
 
-        dino_out = self.dino(**dino_inputs)
+        timer = stage_timer or (lambda _name: nullcontext())
+        with timer("vision_preprocess"):
+            dino_inputs, siglip_inputs = self._preprocess_rgb_tensor(rgb)
+
+        with timer("dinov3"):
+            dino_out = self.dino(**dino_inputs)
         dino_tokens = dino_out.last_hidden_state[:, 1 + self.dino_regs:, :]
         patch_count = dino_tokens.size(1)
         height = _sqrt_int(patch_count)
         width = height
 
-        siglip_out = self.siglip(**siglip_inputs)
+        with timer("siglip"):
+            siglip_out = self.siglip(**siglip_inputs)
         siglip_tokens = siglip_out.last_hidden_state
         token_count = siglip_tokens.size(1)
         siglip_height = int(round(math.sqrt(token_count)))

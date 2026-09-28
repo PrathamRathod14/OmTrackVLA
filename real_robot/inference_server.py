@@ -22,6 +22,7 @@ PROJECT_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_DIR))
 
 from protocol import receive_message, send_message
+from perf_log import PerfLog, timed
 from target_perception import TargetPerception, trajectory_is_directionally_consistent
 
 
@@ -122,7 +123,9 @@ class OmTrackInference:
         return base64.b64encode(encoded_jpeg.tobytes()).decode("ascii")
 
     @torch.inference_mode()
-    def infer(self, rgb: np.ndarray, prompt: str, reset_target: bool = False) -> dict:
+    def infer(self, rgb: np.ndarray, prompt: str, reset_target: bool = False, stages: Optional[dict] = None) -> dict:
+        synchronize = (lambda: torch.cuda.synchronize(self.device)) if stages is not None and self.device.type == "cuda" else None
+        stage_timer = lambda name: timed(stages, name, synchronize)
         if reset_target:
             self.target_perception.reset()
             self.target_was_valid = False
@@ -132,7 +135,8 @@ class OmTrackInference:
             self.last_prompt = prompt
             self.target_was_valid = False
 
-        target = self.target_perception.update(rgb, prompt)
+        with stage_timer("target_total"):
+            target = self.target_perception.update(rgb, prompt, stage_timer=stage_timer)
         result = {
             "target_query": target.query,
             "target_state": target.state,
@@ -158,8 +162,9 @@ class OmTrackInference:
                 "trajectory": [[0.0, 0.0, 0.0] for _ in range(8)],
                 "trajectory_valid": False,
                 "trajectory_reason": "target_not_locked",
-                "target_image_b64": self._encode_target_view(target.annotated_bgr),
             })
+            with stage_timer("target_view_encode"):
+                result["target_image_b64"] = self._encode_target_view(target.annotated_bgr)
             return result
         if not self.target_was_valid:
             self.reset()
@@ -170,40 +175,44 @@ class OmTrackInference:
         if planner_updated:
             if self.cuda_vision_preprocess:
                 rgb_tensor = torch.from_numpy(np.ascontiguousarray(rgb, dtype=np.uint8))
-                dino_tokens, siglip_tokens, height, width = self.vision.encode_rgb_tensor(rgb_tensor)
+                dino_tokens, siglip_tokens, height, width = self.vision.encode_rgb_tensor(rgb_tensor, stage_timer=stage_timer)
             else:
                 from PIL import Image
 
                 image = Image.fromarray(rgb.astype(np.uint8), mode="RGB")
-                dino_tokens, height, width = self.vision._encode_dino([image])
-                siglip_tokens = self.vision._encode_siglip([image], out_hw=(height, width))
-            combined = torch.cat([dino_tokens, siglip_tokens], dim=-1)
-            fine = self.grid_pool_tokens(combined, height, width, out_tokens=64)[0].float()
-            coarse = self.grid_pool_tokens(combined, height, width, out_tokens=4)[0].float()
+                with stage_timer("dinov3"):
+                    dino_tokens, height, width = self.vision._encode_dino([image])
+                with stage_timer("siglip"):
+                    siglip_tokens = self.vision._encode_siglip([image], out_hw=(height, width))
+            with stage_timer("token_pool_history"):
+                combined = torch.cat([dino_tokens, siglip_tokens], dim=-1)
+                fine = self.grid_pool_tokens(combined, height, width, out_tokens=64)[0].float()
+                coarse = self.grid_pool_tokens(combined, height, width, out_tokens=4)[0].float()
             # Kept on the inference device: 31 x 4 x 1536 floats is about 762 KB, so
             # holding it in VRAM removes a device-to-host and host-to-device copy per frame.
             self.coarse_history.append(coarse.detach())
 
-            history = list(self.coarse_history)
-            if len(history) < self.history:
-                history = [history[0]] * (self.history - len(history)) + history
-            history = history[-self.history:]
-            coarse_tokens = torch.cat(history, dim=0).unsqueeze(0)
-            coarse_tidx = torch.arange(self.history, device=self.device).repeat_interleave(4).unsqueeze(0)
-            fine_tokens = fine.unsqueeze(0)
-            fine_tidx = torch.full((1, fine_tokens.size(1)), self.history, dtype=torch.long, device=self.device)
-            trajectory = self.planner(
-                coarse_tokens,
-                coarse_tidx,
-                fine_tokens,
-                fine_tidx,
-                [prompt],
-            )
-            trajectory_cpu = trajectory[0].detach().float().cpu().tolist()
-            index = min(max(0, self.waypoint_index), trajectory.shape[1] - 1)
-            waypoint = trajectory[0, index].detach().float().cpu()
-            command = [float(waypoint[0] / self.prediction_dt), float(waypoint[1] / self.prediction_dt)]
-            command.append(float(waypoint[2] / self.prediction_dt) if waypoint.numel() >= 3 else 0.0)
+            with stage_timer("planner_and_download"):
+                history = list(self.coarse_history)
+                if len(history) < self.history:
+                    history = [history[0]] * (self.history - len(history)) + history
+                history = history[-self.history:]
+                coarse_tokens = torch.cat(history, dim=0).unsqueeze(0)
+                coarse_tidx = torch.arange(self.history, device=self.device).repeat_interleave(4).unsqueeze(0)
+                fine_tokens = fine.unsqueeze(0)
+                fine_tidx = torch.full((1, fine_tokens.size(1)), self.history, dtype=torch.long, device=self.device)
+                trajectory = self.planner(
+                    coarse_tokens,
+                    coarse_tidx,
+                    fine_tokens,
+                    fine_tidx,
+                    [prompt],
+                )
+                trajectory_cpu = trajectory[0].detach().float().cpu().tolist()
+                index = min(max(0, self.waypoint_index), trajectory.shape[1] - 1)
+                waypoint = trajectory[0, index].detach().float().cpu()
+                command = [float(waypoint[0] / self.prediction_dt), float(waypoint[1] / self.prediction_dt)]
+                command.append(float(waypoint[2] / self.prediction_dt) if waypoint.numel() >= 3 else 0.0)
             self.last_planner_command = command
             self.last_planner_trajectory = trajectory_cpu
             self.last_planner_time = time.monotonic()
@@ -215,11 +224,12 @@ class OmTrackInference:
             trajectory_cpu = list(self.last_planner_trajectory)
         if self.last_planner_time is None:
             raise RuntimeError("planner timestamp is unexpectedly empty")
-        trajectory_valid, trajectory_reason = trajectory_is_directionally_consistent(
-            target.bbox,
-            rgb.shape[1],
-            trajectory_cpu,
-        )
+        with stage_timer("trajectory_check"):
+            trajectory_valid, trajectory_reason = trajectory_is_directionally_consistent(
+                target.bbox,
+                rgb.shape[1],
+                trajectory_cpu,
+            )
         result.update({
             "planner_ran": True,
             "planner_updated": planner_updated,
@@ -228,8 +238,9 @@ class OmTrackInference:
             "trajectory": trajectory_cpu,
             "trajectory_valid": bool(target.valid and trajectory_valid),
             "trajectory_reason": trajectory_reason if target.valid else "target_not_locked",
-            "target_image_b64": self._encode_target_view(target.annotated_bgr),
         })
+        with stage_timer("target_view_encode"):
+            result["target_image_b64"] = self._encode_target_view(target.annotated_bgr)
         return result
 
 
@@ -247,6 +258,7 @@ def decode_request_image(request: dict) -> np.ndarray:
 
 
 def serve(args: argparse.Namespace) -> None:
+    profile = PerfLog("inference")
     model = None if args.dummy else OmTrackInference(
         PROJECT_DIR,
         args.device,
@@ -279,11 +291,13 @@ def serve(args: argparse.Namespace) -> None:
                 request = receive_message(connection)
                 started = time.monotonic()
                 request_id = request.get("request_id")
+                stages = {} if profile.enabled else None
                 try:
                     prompt = str(request.get("prompt", "follow the person")).strip()[:256]
                     if not prompt:
                         raise ValueError("prompt is empty")
-                    image = decode_request_image(request)
+                    with timed(stages, "jpeg_decode"):
+                        image = decode_request_image(request)
                     if model is None:
                         result = {
                             "planner_ran": False,
@@ -298,7 +312,7 @@ def serve(args: argparse.Namespace) -> None:
                             "trajectory_reason": "dummy_inference",
                         }
                     else:
-                        result = model.infer(image, prompt, bool(request.get("reset_target")))
+                        result = model.infer(image, prompt, bool(request.get("reset_target")), stages=stages)
                     response = {
                         "ok": True,
                         "request_id": request_id,
@@ -306,7 +320,11 @@ def serve(args: argparse.Namespace) -> None:
                     }
                     response.update(result)
                     send_message(connection, response)
+                    profile.record(event="frame", request_id=request_id, planner_updated=result.get("planner_updated"),
+                                   target_state=result.get("target_state"), inference_ms=response["inference_seconds"] * 1000.0,
+                                   stages_ms=stages)
                 except Exception as exc:
+                    profile.record(event="error", request_id=request_id, error=f"{type(exc).__name__}: {exc}", stages_ms=stages)
                     send_message(connection, {
                         "ok": False,
                         "request_id": request_id,

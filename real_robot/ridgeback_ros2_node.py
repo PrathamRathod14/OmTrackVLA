@@ -26,6 +26,7 @@ from std_msgs.msg import Bool, Empty, String
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from protocol import receive_message, send_message
+from perf_log import PerfLog
 from safety import Command, SafetyConfig, SafetyState, directional_obstacle_distance, evaluate, rate_limit
 from target_geometry import CameraGeometry, extrinsics_rotation, fuse_target_command, locate_target, trajectory_follows_target
 
@@ -39,6 +40,11 @@ class RidgebackController(Node):
     def __init__(self) -> None:
         super().__init__("omtrackvla_ridgeback")
         self._declare_parameters()
+        self._profile = PerfLog("bridge")
+        if self._profile.enabled and not bool(self.get_parameter("dry_run").value):
+            self._profile.close()
+            raise RuntimeError("OMTRACKVLA_PROFILE_DIR requires dry_run=true")
+        self._last_profile_control_start: Optional[float] = None
         self._lock = threading.Lock()
         self._wake_worker = threading.Event()
         self._shutdown = threading.Event()
@@ -482,11 +488,14 @@ class RidgebackController(Node):
                 reset_target = self._reset_target_requested
             if jpeg is None or frame_id == self._processed_frame_id:
                 continue
+            profile_started = time.perf_counter() if self._profile.enabled else 0.0
+            stages_ms = {}
             try:
                 if self._socket is None:
                     self._socket = self._connect()
                     self.get_logger().info("Connected to the local OmTrackVLA inference server")
                 self._request_id += 1
+                transport_started = time.perf_counter()
                 send_message(self._socket, {
                     "request_id": self._request_id,
                     "prompt": prompt,
@@ -494,7 +503,10 @@ class RidgebackController(Node):
                     "encoding": "jpeg",
                     "image_b64": base64.b64encode(jpeg).decode("ascii"),
                 })
+                stages_ms["request_encode_send"] = (time.perf_counter() - transport_started) * 1000.0
+                response_started = time.perf_counter()
                 response = receive_message(self._socket)
+                stages_ms["response_wait"] = (time.perf_counter() - response_started) * 1000.0
                 if response.get("request_id") != self._request_id or not response.get("ok"):
                     raise RuntimeError(str(response.get("error", "invalid inference response")))
                 if reset_target:
@@ -528,13 +540,16 @@ class RidgebackController(Node):
                 target["raw_trajectory_reason"] = str(response.get("trajectory_reason", "missing"))
                 target_image = response.get("target_image_b64")
                 position_valid, position, position_info = False, None, {"reason": "target_not_locked"}
+                geometry_started = time.perf_counter()
                 if response.get("target_valid") is True and bool(self.get_parameter("require_target_position").value):
                     position_valid, position, position_info = self._check_target_position(
                         response.get("target_bbox"), trajectory, frame_depth, frame_stamp
                     )
+                stages_ms["depth_geometry"] = (time.perf_counter() - geometry_started) * 1000.0
                 candidate = raw_candidate
                 fusion_info = {"reason": "target_fusion_disabled"}
                 fusion_enabled = bool(self.get_parameter("enable_target_fusion").value)
+                fusion_started = time.perf_counter()
                 if (
                     fusion_enabled
                     and planner_ran
@@ -556,6 +571,7 @@ class RidgebackController(Node):
                         yaw_gain=float(self.get_parameter("fusion_yaw_gain").value),
                         max_angular_speed=float(self.get_parameter("max_angular_z").value),
                     )
+                stages_ms["command_fusion"] = (time.perf_counter() - fusion_started) * 1000.0
                 trajectory_valid = planner_ran and (
                     position_valid if fusion_enabled and response.get("target_valid") is True else raw_trajectory_valid
                 )
@@ -587,7 +603,17 @@ class RidgebackController(Node):
                     self._last_inference_seconds = float(response.get("inference_seconds", 0.0))
                     self._last_pipeline_seconds = max(0.0, self._now() - frame_stamp)
                     self._processed_frame_id = frame_id
+                if self._profile.enabled:
+                    self._profile.record(
+                        event="frame", request_id=self._request_id, frame_id=frame_id,
+                        target_state=response.get("target_state"), planner_updated=planner_updated,
+                        inference_ms=self._last_inference_seconds * 1000.0,
+                        pipeline_ms=self._last_pipeline_seconds * 1000.0,
+                        worker_ms=(time.perf_counter() - profile_started) * 1000.0,
+                        stages_ms=stages_ms,
+                    )
             except Exception as exc:
+                self._profile.record(event="error", frame_id=frame_id, error=f"{type(exc).__name__}: {exc}")
                 with self._lock:
                     self._clear_prediction_locked()
                     self._inference_connected = False
@@ -654,6 +680,12 @@ class RidgebackController(Node):
         )
 
     def _control_tick(self) -> None:
+        tick_started = time.perf_counter() if self._profile.enabled else 0.0
+        tick_interval_ms = None
+        if self._profile.enabled:
+            if self._last_profile_control_start is not None:
+                tick_interval_ms = (tick_started - self._last_profile_control_start) * 1000.0
+            self._last_profile_control_start = tick_started
         now = self._now()
         with self._lock:
             candidate = self._candidate
@@ -713,6 +745,12 @@ class RidgebackController(Node):
                 self.get_logger().warning(f"Motion gate: {reason}")
             self._last_reason = reason
         self._was_allowed = allowed
+        if self._profile.enabled:
+            self._profile.record(
+                event="control", reason=reason, allowed=allowed,
+                tick_interval_ms=tick_interval_ms,
+                tick_ms=(time.perf_counter() - tick_started) * 1000.0,
+            )
 
     def _publish_command(self, command: Command) -> None:
         if self._stamped:
@@ -895,6 +933,7 @@ class RidgebackController(Node):
             for _ in range(5):
                 self._publish_command((0.0, 0.0, 0.0))
                 time.sleep(0.03)
+        self._profile.close()
 
 
 def main() -> None:

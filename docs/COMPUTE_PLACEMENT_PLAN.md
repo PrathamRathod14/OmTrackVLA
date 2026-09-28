@@ -135,22 +135,48 @@ Selecting a CPU inference device automatically retains the legacy PIL/CPU proces
 
 ### Phase 0: full-pipeline measurement
 
-Status: next action. Offline preprocessing timing is available, but live stage timing
-is still required.
+Status: opt-in stage logging implemented and a SEARCHING dry-run baseline captured.
+A locked-person planner capture and occlusion/recovery capture are still required.
 
 Execution order for the Thor comparison: instrument and record the RTX 5060 baseline
 first, freeze a replay scene and configuration, then run that same workload on Thor
 after its Arm64 environment and robot interfaces are validated. A Thor-only timing
 number without this baseline will not establish a speedup.
 
-- Add opt-in per-stage timings for transport/decode, target tracking, Grounding DINO,
-  visual preprocessing, DINOv3, SigLIP, Qwen/waypoint inference, annotation/encode,
-  ROS-side target geometry, fusion, and the 20 Hz control interval.
+- Implemented: `OMTRACKVLA_PROFILE_DIR` writes separate inference and bridge JSONL
+  files with transport/decode, YOLO, association, Grounding DINO, vision
+  preprocessing, DINOv3, SigLIP, token/history, planner, annotation/encode, depth
+  geometry, fusion, and control tick timings. CUDA stage boundaries synchronize the
+  device while profiling. This changes timing and must be used only in dry-run.
+- Implemented: `real_robot/summarize_perf.py` reports count, median, p95, maximum,
+  observed planner/tracking cadence, and motion-gate reasons from the JSONL files.
+- Still needed: collect GPU utilization/VRAM and CPU utilization alongside the JSONL
+  capture; inspect control intervals and stale-sensor stop reasons.
 - Record GPU utilization, VRAM, CPU utilization, target-view rate, planner update rate,
   and stale-sensor stop reasons during fixed supervised scenarios.
 - Measure three cases for at least 60 seconds each: searching with grounding, locked
   tracking with the planner, and temporary occlusion/recovery.
 - Save raw measurements in a timestamped file. Do not tune from console impressions.
+
+First profiled live capture: `log/profile-20260928-baseline/` (local, not committed).
+The controller ran in dry-run with the configured blue-basket prompt and the standard
+Hokuyo drivers for about 92 seconds after startup. All 278 inference frames remained
+`SEARCHING`; no person was detected, so Grounding DINO returned before model inference
+and OmTrackVLA never ran. The target-view cadence was `3.018 Hz`. Inference median/p95
+was `22.666/24.730 ms`; bridge pipeline median/p95 was `24.641/27.394 ms`. Median
+YOLO and BoT-SORT/appearance times were `11.106/5.161 ms`; JPEG decode and target-view
+encode were `2.427/3.169 ms`. The first YOLO frame reached `886.577 ms`, so the
+`911.644 ms` maximum inference time reflects warmup and is not steady-state p95.
+
+The dry-run ROS control interval had median `49.999 ms`, p95 `50.234 ms`, and maximum
+`52.694 ms` over 1,856 intervals; none exceeded 55 ms. Control processing median/p95
+was `0.236/0.286 ms`. Every motion-gate reason was `dry_run:deadman_not_held`; this
+run did not exercise a held deadman or physical motion. One-second GPU samples showed
+`3,907 MiB` median loaded memory, `2%` median utilization, and `13%` maximum sampled
+utilization. Coarse one-second samples may miss short GPU peaks. CPU utilization was
+not recorded in this first capture. These numbers describe only the no-person
+SEARCHING case with profiling enabled and cannot establish planner speed or a Thor
+comparison.
 
 Exit gate: a stage-level median/p95/max report exists and identifies a measured
 bottleneck. No motion behavior or threshold changes are part of this phase.
@@ -279,6 +305,13 @@ and [ROS 2 Jazzy supported platforms](https://www.openrobotics.org/blog/2024/5/r
 
 ### 2026-09-28
 
+- Added opt-in dry-run JSONL stage profiling in the inference server and ROS bridge,
+  plus a summary command. Existing 59 tests and two profiling tests pass. CUDA
+  synchronization makes profiled timing diagnostic rather than directly comparable
+  with the earlier unprofiled offline numbers. No placement or motion threshold changed.
+- Captured 278 no-person SEARCHING frames at `3.018 Hz` and 1,856 control intervals
+  without a >55 ms gap in dry-run. The locked-person planner and grounding-model cases
+  remain unmeasured because no person appeared during this capture.
 - Set the next action for the Thor question: produce a repeatable RTX 5060
   full-pipeline baseline before attempting an Arm64 port or comparing runtimes.
 - Expanded the Thor option into explicit Arm64 build, device-interface, replay,
