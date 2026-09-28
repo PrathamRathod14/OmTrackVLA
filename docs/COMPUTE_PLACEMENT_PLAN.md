@@ -353,6 +353,26 @@ were copied separately from Git. This establishes a working SEARCHING path and a
 live locked-target planner path in dry-run, not an armable Thor deployment. The patched Hokuyo
 driver and ROS interfaces remain on the existing computer.
 
+### What is installed and where the split executes
+
+The project checkout at `/home/robot/dev/omtrackvla` on Thor contains this project's
+inference server and model code, six model weight sets (`models/`, about 6.6 GB),
+and a separate Arm64 Python 3.12 environment with CUDA PyTorch. Copying the code
+and weights did not move the robot's sensor or motor interfaces. In the selected
+split, the process placement is:
+
+| Machine and processor | Project work |
+| --- | --- |
+| Thor GPU, through CUDA | YOLO11n person model; Grounding DINO model; DINOv3 and SigLIP encoders and their shared CUDA image preprocessing; OmTrackVLA/Qwen3 visual projection and waypoint planner; token pooling and retained feature tensors. |
+| Thor CPU | Inference socket and JSON/JPEG handling; BoT-SORT association, optical flow, HSV clothing features and colour checks; grounding-box postprocessing, target identity state machine, diagnostic image drawing and JPEG encoding. |
+| Ridgeback computer CPU | ROS 2 subscriptions for camera, depth, LiDAR, E-stop and deadman; camera frame selection; depth localization; 75/25 leader/model command fusion; freshness, obstacle, speed and 20 Hz motor safety checks; `/cmd_vel`, status/path/image ROS publication and RViz. |
+| Ridgeback RTX 5060 | No project neural inference when the bridge is connected to Thor. The local inference path remains available as a separate launch mode. |
+
+`protocol.py` is used on both computers. The Ridgeback bridge sends a selected
+compressed RGB frame and prompt to Thor; Thor returns target state, annotated image,
+raw waypoints and provenance. Ridgeback combines that result with its local depth
+and safety data. An all-on-Thor ROS/motor deployment is not implemented.
+
 ### How this repository would run on Thor
 
 The implemented first port moves only `real_robot/inference_server.py` and its CUDA
@@ -531,6 +551,11 @@ and [ROS 2 Jazzy supported platforms](https://www.openrobotics.org/blog/2024/5/r
 
 ### 2026-09-28
 
+- Made the implemented split inventory explicit: Thor stores the project code,
+  CUDA environment and models; its GPU runs neural stages while its CPU runs the
+  inference service and tracking logic. Ridgeback retains ROS, depth/fusion and
+  motor safety. This changes documentation only; the next action remains a matched
+  live RTX/Thor dry-run comparison before considering remote arming.
 - Audited the live host placement: the armable bridge was connected to the local
   loopback inference server, whose RTX process occupied `5,368 MiB`; Thor's separate
   server was listening without a client. Clarified that the implemented Thor split
