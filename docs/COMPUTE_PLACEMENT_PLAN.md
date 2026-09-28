@@ -44,6 +44,37 @@ depth conversion process at 13%. These values are diagnostic observations, not s
 benchmarks. Full-pipeline profiling must be performed with the same background services
 enabled because they compete for the eight CPU cores.
 
+### Side-by-side compute resources, checked 2026-09-28T17:40Z
+
+The commands `lscpu`, `free -h`, and `nvidia-smi` were run on Ridgeback
+(`cpr-r100-0160`) and over SSH on Thor (`nvidia-thor-r100-0160`). `tegrastats` and
+`nvpmodel -q` supplied Thor's power-mode snapshot. GPU core counts and peak memory
+bandwidth are vendor specifications, not measurements of this robot's pipeline.
+
+| Resource | Ridgeback computer | Jetson AGX Thor developer kit |
+| --- | --- | --- |
+| CPU | Intel i7-9700TE, 8 cores / 8 threads, x86_64, up to 3.8 GHz | Arm Neoverse V3AE, 14 cores / 14 threads, Arm64, up to 2.6 GHz |
+| System RAM visible to Linux | 31 GiB total; 23 GiB available at this check | 122 GiB total; 112 GiB available at this check |
+| GPU | Discrete GeForce RTX 5060, Blackwell, 3,840 CUDA cores | Integrated NVIDIA Thor Blackwell GPU, 2,560 CUDA cores |
+| GPU-accessible memory | 8,151 MiB dedicated GDDR7 VRAM, separate from system RAM | Shared LPDDR5X system memory; 128 GB nominal device capacity is **not dedicated VRAM** |
+| Published peak memory bandwidth | 448 GB/s for RTX GDDR7 | 273 GB/s for Thor shared LPDDR5X |
+| Power setting observed | RTX board power limit 145 W | `nvpmodel` 120 W mode; this is a platform mode, not a measured GPU draw |
+| GPU activity at this idle snapshot | 28 MiB used, 0% compute, no compute process | 0% compute, no inference process; `nvidia-smi` does not expose a comparable dedicated-VRAM figure |
+
+The memory-bandwidth paths and power boundaries differ: RTX bandwidth is for its
+dedicated GPU memory, while Thor's is shared by CPU and GPU; the RTX 145 W limit is
+for the graphics card, while Thor's 120 W mode covers its platform budget. CPU clock
+rates and CUDA-core counts also cannot rank actual OmTrackVLA speed across these
+architectures. Thor has much more model-memory headroom; Ridgeback's RTX has a
+higher published GPU-memory bandwidth and more CUDA cores. Neither fact overrides
+the measured model and network pipeline. The prior live Thor locked-target dry-run
+reached 1.03 planner updates/s under a 2 Hz cap; there is still no matched live
+RTX-versus-Thor locked-target baseline or utilization trace.
+
+Specifications: [Intel i7-9700TE](https://www.intel.com/content/www/us/en/products/sku/195329/intel-core-i79700te-processor-12m-cache-up-to-3-80-ghz/specifications.html),
+[NVIDIA RTX 5060](https://www.nvidia.com/en-us/geforce/graphics-cards/50-series/rtx-5060-family/),
+and [NVIDIA Jetson Thor](https://developer.nvidia.com/blog/introducing-nvidia-jetson-thor-the-ultimate-platform-for-physical-ai).
+
 ## Current placement
 
 The CPU/CUDA entries below describe stages of the active local RTX run. In the
@@ -595,6 +626,12 @@ and [ROS 2 Jazzy supported platforms](https://www.openrobotics.org/blog/2024/5/r
 
 ### 2026-09-28
 
+- Compared the two attached computers from fresh `lscpu`, `free`, GPU and Thor
+  power-mode snapshots. Ridgeback has an 8-core i7-9700TE, 31 GiB RAM, and an RTX
+  5060 with 8,151 MiB dedicated VRAM; Thor has 14 Arm cores and 122 GiB Linux-visible
+  shared RAM. Published CUDA-core and memory-bandwidth figures favor the RTX on those
+  individual specifications, while Thor offers far more shared-memory capacity.
+  No inference process was active during this snapshot; no speed ranking is claimed.
 - Assessed using the idle Ridgeback RTX concurrently with Thor. The live Thor log's
   31 planner-update frames had `346.890 ms` median inference and `366.603 ms` median
   bridge time, while locked-span cadence was `1.03 Hz` under a `2 Hz` cap. Neither
