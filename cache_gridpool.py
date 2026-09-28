@@ -10,10 +10,35 @@ from pathlib import Path
 import torch
 import torch.nn.functional as F
 import torch.nn as nn
+from torchvision.transforms import InterpolationMode
+from torchvision.transforms.functional import resize as tensor_resize
 
 from transformers import AutoImageProcessor, AutoModel
 from transformers import SiglipVisionModel, SiglipImageProcessor
 from PIL import Image
+
+
+def resize_rgb_tensor_for_vision(
+    rgb: torch.Tensor,
+    image_size: int,
+    device: torch.device,
+) -> torch.Tensor:
+    """Upload one uint8 RGB frame and resize it once for both vision towers.
+
+    The real-robot path previously resized one PIL image and then ran two separate
+    host image processors before uploading their outputs. This keeps the resize on
+    CUDA and returns one shared [0, 1] tensor for tower-specific normalization.
+    """
+    if rgb.dtype != torch.uint8 or rgb.ndim != 3 or rgb.shape[-1] != 3:
+        raise ValueError("expected a (H, W, 3) uint8 RGB tensor")
+    batch = rgb.permute(2, 0, 1).unsqueeze(0).to(device, non_blocking=True)
+    batch = tensor_resize(
+        batch,
+        [int(image_size), int(image_size)],
+        interpolation=InterpolationMode.BICUBIC,
+        antialias=True,
+    )
+    return batch.to(torch.float32).mul_(1.0 / 255.0)
 
 def ensure_dir(p: str) -> None:
     os.makedirs(p, exist_ok=True)
@@ -240,6 +265,16 @@ class VisionFeatureCacher(nn.Module):
         self.dino_proc = AutoImageProcessor.from_pretrained(cfg.dino_model_name)
         self.dino = AutoModel.from_pretrained(cfg.dino_model_name)
         self.dino.eval().to(self.device)
+        self.register_buffer(
+            "_dino_image_mean",
+            torch.tensor(self.dino_proc.image_mean, dtype=torch.float32, device=self.device).view(1, 3, 1, 1),
+            persistent=False,
+        )
+        self.register_buffer(
+            "_dino_image_std",
+            torch.tensor(self.dino_proc.image_std, dtype=torch.float32, device=self.device).view(1, 3, 1, 1),
+            persistent=False,
+        )
         self.dino_patch = getattr(self.dino.config, 'patch_size', None)
         # Default to 0 registers when field is missing
         self.dino_regs = int(getattr(self.dino.config, 'num_register_tokens', 0) or 0)
@@ -248,6 +283,16 @@ class VisionFeatureCacher(nn.Module):
         self.siglip_proc = SiglipImageProcessor.from_pretrained(cfg.siglip_model_name)
         self.siglip = SiglipVisionModel.from_pretrained(cfg.siglip_model_name)
         self.siglip.eval().to(self.device)
+        self.register_buffer(
+            "_siglip_image_mean",
+            torch.tensor(self.siglip_proc.image_mean, dtype=torch.float32, device=self.device).view(1, 3, 1, 1),
+            persistent=False,
+        )
+        self.register_buffer(
+            "_siglip_image_std",
+            torch.tensor(self.siglip_proc.image_std, dtype=torch.float32, device=self.device).view(1, 3, 1, 1),
+            persistent=False,
+        )
         self.siglip_hidden = getattr(self.siglip.config, 'hidden_size', 1152)
 
     # ---------------------------------------
@@ -261,6 +306,40 @@ class VisionFeatureCacher(nn.Module):
         else:
             inputs = self.siglip_proc(images=pil_list, return_tensors="pt", size={"height": self.cfg.image_size, "width": self.cfg.image_size})
         return {k: to_device(v, self.device) for k, v in inputs.items()}
+
+    def _preprocess_rgb_tensor(self, rgb: torch.Tensor) -> Tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor]]:
+        shared = resize_rgb_tensor_for_vision(rgb, self.cfg.image_size, self.device)
+        dino = (shared - self._dino_image_mean) / self._dino_image_std
+        siglip = (shared - self._siglip_image_mean) / self._siglip_image_std
+        return {"pixel_values": dino}, {"pixel_values": siglip}
+
+    @torch.inference_mode()
+    def encode_rgb_tensor(self, rgb: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, int, int]:
+        """Encode one RGB frame after one shared CUDA resize and upload."""
+        dino_inputs, siglip_inputs = self._preprocess_rgb_tensor(rgb)
+
+        dino_out = self.dino(**dino_inputs)
+        dino_tokens = dino_out.last_hidden_state[:, 1 + self.dino_regs:, :]
+        patch_count = dino_tokens.size(1)
+        height = _sqrt_int(patch_count)
+        width = height
+
+        siglip_out = self.siglip(**siglip_inputs)
+        siglip_tokens = siglip_out.last_hidden_state
+        token_count = siglip_tokens.size(1)
+        siglip_height = int(round(math.sqrt(token_count)))
+        if siglip_height * siglip_height == token_count - 1:
+            siglip_tokens = siglip_tokens[:, 1:, :]
+            token_count = siglip_tokens.size(1)
+            siglip_height = int(round(math.sqrt(token_count)))
+        if siglip_height * siglip_height != token_count:
+            raise ValueError(f"SigLIP tokens not square (S={token_count})")
+        siglip_tokens = adapt_siglip_grid(
+            siglip_tokens,
+            grid_hw=(siglip_height, siglip_height),
+            out_hw=(height, width),
+        )
+        return dino_tokens, siglip_tokens, height, width
 
     @torch.inference_mode()
     def _encode_dino(self, pil_list: List[Image.Image]) -> Tuple[torch.Tensor, int, int]:

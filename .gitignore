@@ -19,3 +19,10 @@ ckpt*/
 
 *.npy
 *.npz
+
+# Local presentation drafts, runtime logs, and rebuilt ROS install tree.
+.codex-ppt-edit/
+.codex-ppt-revision/
+output/
+log/
+real_robot/urg_node_overlay/

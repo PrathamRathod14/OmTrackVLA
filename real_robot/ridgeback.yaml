@@ -1,18 +1,55 @@
 /**/omtrackvla_ridgeback:
   ros__parameters:
-    camera_topic: camera/color/image_raw
-    camera_compressed: false
+    camera_topic: camera/color/image_raw/compressed
+    camera_compressed: true
     scan_topic: sensors/scan
     estop_topic: platform/emergency_stop
     cmd_vel_topic: cmd_vel
     cmd_vel_stamped: true
     # Edit this line to change the natural-language target used at startup.
-    prompt: Follow the person holding something blue color basket.
+    # prompt: Follow the person who is wearing dark red T-shirt.
+    # prompt: Follow the person who is wearing long white coat lab.
+    prompt: Follow the person who is holding blue basket.
+    # prompt: Follow the person who is holding a silver bottle.
+
     dry_run: true
     require_scan: true
     require_estop: true
+    # Motion requires a LOCKED target. Target fusion corrects a raw OmTrackVLA
+    # proposal toward the depth-localized leader before this consistency gate.
+    require_target: true
+    require_trajectory_consistency: true
+    # Depth-localize the locked leader for fusion. The fused controller slows and stops
+    # translation at min_follow_distance.
+    require_target_position: true
+    # Raw depth stalled the color stream; use the PNG compressedDepth transport.
+    depth_topic: camera/depth/image_rect_raw/compressedDepth
+    depth_compressed: true
+    depth_info_topic: camera/depth/camera_info
+    color_info_topic: camera/color/camera_info
+    extrinsics_topic: camera/extrinsics/depth_to_color
+    # Camera pose in base_link [x, y, z, roll, pitch, yaw] (m, rad). The camera is not in
+    # TF. z/roll/pitch from calibrate_camera_mount.py on 2026-09-22 (1.05 m above floor,
+    # base_link 0.026 m above floor, level). x, y, yaw are NOT yet measured.
+    camera_mount: [0.0, 0.0, 1.03, 0.0, 0.0, 0.0]
+    max_target_range: 6.0
+    min_follow_distance: 0.9
+    retreat_tolerance: 0.05
+    reject_path_retreat: false
+    # Target fusion retains aligned OmTrackVLA motion as a detour component, but
+    # replaces an opposite proposal with motion toward the locked leader.
+    enable_target_fusion: true
+    fusion_target_weight: 0.75
+    fusion_linear_gain: 0.4
+    fusion_minimum_speed: 0.04
+    fusion_yaw_gain: 0.8
     inference_port: 18765
-    inference_rate: 2.0
+    # Smooth target view without increasing the heavy planner load: tracking/display
+    # runs at 3 Hz, while OmTrackVLA remains 2 Hz in inference_server.py. Grounding
+    # DINO runs every eighth tracking frame while searching/recovering (~0.375 Hz).
+    inference_rate: 3.0
+    # Reject a cached OmTrackVLA result if its model timestamp exceeds this age.
+    planner_cache_timeout: 0.75
     control_rate: 20.0
     enable_timeout: 0.5
     camera_timeout: 0.75
@@ -22,6 +59,10 @@
     # Measured from the LiDAR origin. The R100 chassis is 0.960 x 0.793 m,
     # so keep this above the 0.48 m front half-length.
     obstacle_stop_distance: 0.70
+    rotation_stop_distance: 0.67
+    robot_half_length: 0.48
+    robot_half_width: 0.397
+    obstacle_lateral_margin: 0.05
     max_linear_x: 0.20
     max_linear_y: 0.20
     max_angular_z: 0.35

@@ -1,0 +1,35 @@
+diff --git a/src/urg_c_wrapper.cpp b/src/urg_c_wrapper.cpp
+index 016a727..b94140c 100644
+--- a/src/urg_c_wrapper.cpp
++++ b/src/urg_c_wrapper.cpp
+@@ -69,6 +69,10 @@ URGCWrapper::URGCWrapper(
+     ss << "Could not open network Hokuyo:\n";
+     ss << ip_address_ << ":" << ip_port_ << "\n";
+     ss << urg_error(&urg_);
++    // urg_open() can open TCP before a later SCIP initialization failure.
++    // A throwing constructor has no destructor, so explicitly release the
++    // scanner's single TCP session before the node retries.
++    urg_close(&urg_);
+     throw std::runtime_error(ss.str());
+   }
+ 
+diff --git a/src/urg_node.cpp b/src/urg_node.cpp
+index 4ab990e..71f3e4d 100644
+--- a/src/urg_node.cpp
++++ b/src/urg_node.cpp
+@@ -545,7 +545,6 @@ void UrgNode::scanThread()
+             echoes_freq_->tick();
+           } else {
+             RCLCPP_WARN(this->get_logger(), "Could not grab multi echo scan.");
+-            device_status_ = urg_->getSensorStatus();
+             error_count_++;
+           }
+         } else {
+@@ -555,7 +554,6 @@ void UrgNode::scanThread()
+             laser_freq_->tick();
+           } else {
+             RCLCPP_WARN(this->get_logger(), "Could not grab single echo scan.");
+-            device_status_ = urg_->getSensorStatus();
+             error_count_++;
+           }
+         }

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import math
-from typing import Optional, Sequence, Tuple
+from typing import Iterable, Optional, Sequence, Tuple
 
 
 Command = Tuple[float, float, float]
@@ -18,11 +18,15 @@ class SafetyConfig:
     scan_timeout: float = 0.5
     estop_timeout: float = 1.0
     obstacle_stop_distance: float = 0.70
+    rotation_stop_distance: float = 0.67
     max_linear_x: float = 0.20
     max_linear_y: float = 0.20
     max_angular_z: float = 0.35
     require_scan: bool = True
     require_estop: bool = True
+    require_target: bool = True
+    require_trajectory_consistency: bool = True
+    require_target_position: bool = True
 
 
 @dataclass(frozen=True)
@@ -33,10 +37,14 @@ class SafetyState:
     inference_stamp: Optional[float]
     scan_stamp: Optional[float]
     obstacle_distance: Optional[float]
+    rotation_obstacle_distance: Optional[float]
     estop_seen: bool
     estop_stamp: Optional[float]
     estop_active: bool
     inference_connected: bool
+    target_valid: bool
+    trajectory_valid: bool
+    target_position_valid: bool
     candidate: Optional[Sequence[float]]
 
 
@@ -60,13 +68,12 @@ def evaluate(config: SafetyConfig, state: SafetyState, now: float) -> Tuple[bool
         return False, "inference_disconnected", stop
     if not _fresh(now, state.inference_stamp, config.inference_timeout):
         return False, "inference_stale", stop
-    if config.require_scan:
-        if not _fresh(now, state.scan_stamp, config.scan_timeout):
-            return False, "scan_stale", stop
-        if state.obstacle_distance is None:
-            return False, "scan_has_no_valid_ranges", stop
-        if state.obstacle_distance < config.obstacle_stop_distance:
-            return False, "obstacle_too_close", stop
+    if config.require_target and not state.target_valid:
+        return False, "target_not_locked", stop
+    if config.require_trajectory_consistency and not state.trajectory_valid:
+        return False, "trajectory_target_mismatch", stop
+    if config.require_target_position and not state.target_position_valid:
+        return False, "target_position_inconsistent", stop
     if state.candidate is None or len(state.candidate) != 3:
         return False, "inference_invalid", stop
     command = tuple(float(value) for value in state.candidate)
@@ -77,7 +84,50 @@ def evaluate(config: SafetyConfig, state: SafetyState, now: float) -> Tuple[bool
         max(-config.max_linear_y, min(config.max_linear_y, command[1])),
         max(-config.max_angular_z, min(config.max_angular_z, command[2])),
     )
-    return True, "ready", clipped
+    reason = "ready"
+    if config.require_scan:
+        if not _fresh(now, state.scan_stamp, config.scan_timeout):
+            return False, "scan_stale", stop
+        if state.obstacle_distance is None:
+            return False, "scan_has_no_valid_ranges", stop
+        if state.obstacle_distance < config.obstacle_stop_distance:
+            return False, "obstacle_too_close", stop
+        rotation_distance = state.rotation_obstacle_distance
+        if abs(clipped[2]) > 1e-6 and (
+            rotation_distance is None or rotation_distance < config.rotation_stop_distance
+        ):
+            clipped = (clipped[0], clipped[1], 0.0)
+            if math.hypot(clipped[0], clipped[1]) <= 1e-6:
+                return False, "obstacle_too_close_for_rotation", stop
+            reason = "ready_rotation_suppressed"
+    return True, reason, clipped
+
+
+def directional_obstacle_distance(
+    points_xy: Iterable[Sequence[float]],
+    command: Sequence[float],
+    half_length: float,
+    half_width: float,
+    lateral_margin: float,
+    clear_distance: float,
+) -> Optional[float]:
+    """Nearest scan return in the rectangular robot's translation corridor."""
+    points = [(float(point[0]), float(point[1])) for point in points_xy]
+    if not points:
+        return None
+    vx, vy = float(command[0]), float(command[1])
+    speed = math.hypot(vx, vy)
+    if speed <= 1e-6:
+        return min(math.hypot(x, y) for x, y in points)
+    ux, uy = vx / speed, vy / speed
+    corridor_half_width = abs(uy) * half_length + abs(ux) * half_width + lateral_margin
+    distances = []
+    for x, y in points:
+        along = x * ux + y * uy
+        across = -x * uy + y * ux
+        if along > 0.0 and abs(across) <= corridor_half_width:
+            distances.append(math.hypot(x, y))
+    return min(distances) if distances else float(clear_distance)
 
 
 def rate_limit(previous: Command, target: Command, dt: float, linear_accel: float, angular_accel: float) -> Command:

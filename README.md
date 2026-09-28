@@ -6,6 +6,9 @@
 
 **OmTrackVLA** is a fully open-source Vision-Language-Action (VLA) stack that turns **monocular video** and **natural-language instructions** into actionable, short-horizon waypoints.
 
+Documentation for the local Clearpath Ridgeback integration is collected in
+[`docs/`](docs/README.md).
+
 This repository is dedicated to democratizing embodied AI. We have intentionally released our highly efficient **0.6B checkpoint** along with the **full training pipeline**.
 
 ### 🚀 Why OmTrackVLA?
