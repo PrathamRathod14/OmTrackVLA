@@ -471,6 +471,37 @@ the physical E-stop active, so every control decision remained blocked and no
 physical motion was tested. The observed planner rate and isolated stale response
 need investigation before considering remote arming.
 
+### Would using the Ridgeback RTX alongside Thor help?
+
+Current Thor split: the Ridgeback RTX does no project neural inference. Thor's GPU
+runs the detector, vision encoders, and planner; its CPU runs tracking and image
+handling. This is a placement choice, not evidence that Thor has unlimited capacity.
+In the live blue-basket dry-run, the 31 frames that actually updated the planner had
+median `346.890 ms` inference and `366.603 ms` bridge pipeline time; their maximum
+pipeline time was `495.263 ms`. Across the locked span, observed planner cadence was
+`1.03 Hz` against a configured `2 Hz` *cap*. The cap is not a guaranteed output
+rate, and this log alone cannot attribute the gap to Thor GPU load: target state,
+request scheduling, CPU work, and transport also affect cadence. There is no
+matched live local-RTX-versus-Thor baseline or GPU-utilization/thermal trace yet.
+
+A possible **unimplemented** two-GPU variant would run YOLO/Grounding DINO person
+perception on the Ridgeback RTX and DINOv3/SigLIP/OmTrackVLA waypoint planning on
+Thor. Ridgeback would have to send the selected image and target identity/state to
+Thor, and coordinate two inference services and their frame timestamps. Since the
+planner depends on the verified target, splitting one frame across GPUs adds a
+network handoff and does not automatically shorten its latency; throughput could
+improve only if stages for different frames can overlap without delaying target
+freshness or the 20 Hz safety gate. Keeping both services synchronized and handling
+one side's failure would add operational and safety complexity.
+
+Decision for now: keep the tested single-server Thor split as the experimental
+remote mode, and retain the local RTX path as the armable mode. Before implementing
+the two-GPU variant, capture matched live RTX and Thor runs with the same scene,
+prompt, rate settings, and full stage profiling; record both GPU utilization, memory,
+power/thermal throttling, transport time, planner cadence, p95 latency, and stale
+responses. If a measurable Thor stage or resource bottleneck remains, prototype the
+two-GPU placement in dry-run and compare full-pipeline latency and control timing.
+
 The first live split dry-run on 2026-09-28 captured 117 no-person `SEARCHING`
 frames over approximately 39 seconds: target-view cadence `3.007 Hz`, reported
 inference median/p95 `43.133/44.577 ms`, bridge pipeline median/p95
@@ -564,6 +595,12 @@ and [ROS 2 Jazzy supported platforms](https://www.openrobotics.org/blog/2024/5/r
 
 ### 2026-09-28
 
+- Assessed using the idle Ridgeback RTX concurrently with Thor. The live Thor log's
+  31 planner-update frames had `346.890 ms` median inference and `366.603 ms` median
+  bridge time, while locked-span cadence was `1.03 Hz` under a `2 Hz` cap. Neither
+  these timings nor Thor's hardware rating establish a GPU bottleneck or capacity
+  guarantee. A proposed perception-on-RTX/planner-on-Thor split remains unimplemented;
+  require matched full-pipeline and resource measurements before adding it.
 - Made the implemented split inventory explicit: Thor stores the project code,
   CUDA environment and models; its GPU runs neural stages while its CPU runs the
   inference service and tracking logic. Ridgeback retains ROS, depth/fusion and
