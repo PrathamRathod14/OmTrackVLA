@@ -222,9 +222,51 @@ acceptable full-pipeline latency and memory.
 - Perform physical motion trials only after dry-run timing, replay equivalence, and
   safety-gate checks pass.
 
+## Jetson AGX Thor migration assessment
+
+Status: proposed hardware port; no Thor build or benchmark has been run. "Move to
+Thor" means replacing the present x86 host plus discrete RTX 5060 with an Arm64
+system that has an integrated NVIDIA GPU. It does not replace CUDA. The neural models,
+shared DINOv3/SigLIP preprocessing, and feature tensors would still use CUDA. ROS 2,
+tracking association, target/depth geometry, command fusion, and the independent 20 Hz
+safety gate remain CPU tasks unless a separately measured change justifies moving them.
+
+NVIDIA lists the Jetson AGX Thor Developer Kit with a 14-core Arm CPU, Blackwell GPU,
+128 GB shared LPDDR5X, and a 40-130 W operating range. Its shared system memory is not
+equivalent to 128 GB of dedicated GPU VRAM. JetPack 7.2.1 lists Ubuntu 24.04,
+CUDA 13.2.2, and TensorRT 10.16.2; ROS 2 Jazzy supports Ubuntu 24.04 Arm64.
+These are platform specifications, not OmTrackVLA performance results.
+
+Migration gates:
+
+1. Build the Python 3.9 inference environment and ROS 2 Jazzy bridge for Arm64;
+   verify PyTorch/CUDA, Transformers, Ultralytics, OpenCV, model loading, and every
+   native extension at pinned versions. Rebuild the patched `urg_node` overlay on
+   Arm64. Do not copy the x86 install tree or binary wheels.
+2. Verify camera, both Hokuyo streams, E-stop, deadman, `/cmd_vel`, TF, and the
+   existing prompt/status topics on Thor. Preserve the process split if it remains
+   necessary for Python-version isolation.
+3. Run the same replay and safety suite, then measure full-pipeline median/p95/max
+   latency, target-view and planner cadence, memory pressure, power mode, thermal
+   throttling, and 20 Hz control deadlines on Thor. Use the same scene and settings
+   as the RTX 5060 baseline. Shared memory may reduce transfer overhead, but this
+   must be measured end to end.
+4. Keep the current system until Thor meets target identity equivalence, stale-stop
+   behavior, planner cadence, and safety timing with measured margin. A larger memory
+   pool or advertised AI throughput alone is not evidence of faster following.
+
+Platform sources: [NVIDIA Thor specifications](https://www.nvidia.com/en-us/autonomous-machines/embedded-systems/jetson-thor/),
+[JetPack releases](https://developer.nvidia.com/embedded/jetpack/downloads),
+[NVIDIA on Thor shared memory](https://docs.nvidia.com/datacenter/tesla/mig-user-guide/supported-mig-profiles.html),
+and [ROS 2 Jazzy supported platforms](https://www.openrobotics.org/blog/2024/5/ros-jazzy-jalisco-released).
+
 ## Decision log
 
 ### 2026-09-28
+
+- Expanded the Thor option into explicit Arm64 build, device-interface, replay,
+  performance, power, and safety gates. No Thor hardware is attached and no speedup
+  is claimed. The current RTX 5060 measurements remain the baseline.
 
 - Confirmed the hardware as an RTX 5060 with 8,151 MiB VRAM and an eight-core
   i7-9700TE host.
