@@ -159,6 +159,12 @@ cd /home/robot/dev/omtrackvla
 ./real_robot/start_inference_thor.sh
 ```
 
+The `{"status":"ready"}` output means the models loaded and Thor is listening.
+It does not redirect an already running Ridgeback controller. Do not start a second
+Thor server if one is already listening on port `18765`. Stop the existing local
+Ridgeback controller before switching its bridge to Thor; the launcher refuses a
+second controller.
+
 On the Ridgeback computer, start the ROS bridge in **dry-run** in another terminal:
 
 ```bash

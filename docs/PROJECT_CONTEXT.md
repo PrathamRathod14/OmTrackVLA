@@ -353,6 +353,11 @@ the launcher processes.
   perception and OmTrackVLA neural inference move to Thor, while the Ridgeback
   computer retains ROS sensors, depth, fusion, the 20 Hz safety gate, and `/cmd_vel`.
   A future all-on-Thor system remains a separate proposal.
+- Rechecked both hosts after Thor printed `ready`: Thor had all six required model
+  weight files (6.6 GB), a CUDA-capable PyTorch 2.10.0 environment, and a listener
+  reachable by the Ridgeback. Both checkouts were at `3869f0c`. The active bridge
+  remained connected to local loopback; Thor's listener had no active client. The
+  Thor split uses CUDA on Thor and does not replace CUDA itself.
 
 ### 2026-09-28 (live blue-basket recovery diagnosis)
 

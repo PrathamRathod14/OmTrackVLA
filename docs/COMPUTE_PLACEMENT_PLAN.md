@@ -89,6 +89,16 @@ Thor alone does not switch the bridge; the bridge's `inference_host` determines 
 server processes camera frames. No matched live RTX-versus-Thor performance comparison
 was measured in this placement audit.
 
+A second check at `2026-09-28T14:57Z` found the same loopback connection and a single
+Thor listener with no established client. Both checkouts were at commit `3869f0c`.
+Thor had all six required model weight files (`6.6 GB` total) and PyTorch
+`2.10.0+cu130` reported CUDA available on `NVIDIA Thor`. A protocol probe from
+`192.168.131.1` reached Thor and received the expected missing-image error. The
+`{"status":"ready"}` line is emitted after model construction and socket bind; it
+confirms a loaded server, not that the Ridgeback is sending it images. Thor itself
+uses CUDA for these models; moving inference to Thor changes the CUDA device from
+the RTX 5060 to Thor's integrated GPU, rather than replacing CUDA.
+
 | Work | Active local run | Implemented Thor split when selected |
 | --- | --- | --- |
 | Camera, compressed depth, LiDAR, E-stop and deadman ROS inputs | Ridgeback computer | Ridgeback computer |
@@ -526,6 +536,10 @@ and [ROS 2 Jazzy supported platforms](https://www.openrobotics.org/blog/2024/5/r
   server was listening without a client. Clarified that the implemented Thor split
   moves the inference process, not the ROS bridge or motor safety. No new speed
   comparison or armable Thor result was obtained.
+- Rechecked Thor model files, CUDA availability, matching code commit, and a network
+  protocol probe. `ready` means loaded and listening; the running bridge still used
+  `127.0.0.1`. The switch to Thor requires a separate Ridgeback bridge launch with
+  `inference_host=192.168.131.51`, in dry-run under the current validation status.
 - Implemented the Ridgeback-to-Thor inference split with a single allowed client,
   separate server and bridge launchers, and rejection of late camera-frame responses.
   Confirmed the attached Thor IP via mDNS/SSH and its JetPack 7.0 Arm64 platform;
