@@ -255,9 +255,10 @@ acceptable full-pipeline latency and memory.
 
 ## Jetson AGX Thor migration assessment
 
-Status: split inference port implemented, tested in a no-person live dry-run, and
-checked with a fixed offline person replay on Thor. Live locked-target cadence,
-network-delay/reconnect, and armable equivalence are not yet verified. The chosen
+Status: split inference port implemented, tested in a live locked-target dry-run,
+and checked on fresh blue-basket Ridgeback frames replayed on both computers.
+Network-delay/reconnect, sustained 2 Hz planner cadence, and armable equivalence
+are not yet verified. The chosen
 first port retains the x86/RTX host for ROS and motor safety,
 while Thor runs model inference over the dedicated robot network. A later full move
 would replace the present x86 host plus discrete RTX 5060 with an Arm64 system that
@@ -272,8 +273,8 @@ on the attached Thor and processes Ridgeback camera frames. Thor is
 Ridgeback source address is `192.168.131.1`. A separate Python 3.12 environment
 with CUDA PyTorch 2.10.0+cu130, torchvision 0.25.0+cu130, and matching project
 dependencies was built at `/home/robot/dev/omtrackvla/.conda-env`. The weights
-were copied separately from Git. This establishes a working SEARCHING path and an
-offline locked-target planner path, not an armable Thor deployment. The patched Hokuyo
+were copied separately from Git. This establishes a working SEARCHING path and a
+live locked-target planner path in dry-run, not an armable Thor deployment. The patched Hokuyo
 driver and ROS interfaces remain on the existing computer.
 
 ### How this repository would run on Thor
@@ -284,7 +285,7 @@ sensor drivers, E-stop, deadman and `/cmd_vel` on the present Ridgeback computer
 bridge already has an `inference_host` parameter, so it can send its JPEG request to
 Thor and receive the target and waypoint response. Depth geometry and command fusion
 then remain next to the sensors and motor safety gate. This topology has passed the
-no-person dry-run, while the current armable deployment remains on the x86 host.
+live locked-target dry-run, while the current armable deployment remains on the x86 host.
 
 First-port inventory:
 
@@ -322,8 +323,8 @@ setup is not a Thor deployment recipe. The attached Thor's Python 3.12 environme
 has imported CUDA PyTorch, torchvision, Transformers, Ultralytics, and OpenCV; it
 loaded all real model files and answered an empty-frame request. Numerical behavior
 on locked-person frames, BF16/FP16 planner outputs, and custom CUDA preprocessing
-were checked on a short fixed replay. Wider scenes and live locked-person behavior
-still require comparison with the RTX baseline.
+were checked on a short fixed replay and on current camera frames. Broader scenes
+and end-to-end live timing still require a matched RTX baseline.
 
 The fixed offline replay repeated one cropped, real-person image for 12 frames with
 the prompt `Follow the person.`. Both Thor and RTX locked track ID 1 on frame 3,
@@ -334,6 +335,32 @@ mean absolute difference was `0.001672`. This confirms a basic Thor planner path
 and close numerical agreement for this one input, not identity behavior in a moving
 scene. The replay runs model code without ROS depth, LiDAR, the network bridge, or
 motor control. Its mean frame times are not a full-pipeline speed comparison.
+
+A fresh 90-frame capture from `/r100_0160/camera/color/image_raw/compressed` included
+the person holding the blue basket and then leaving it. Replaying those frames with
+the active blue-basket prompt on Thor and RTX gave identical target state, reason,
+track ID, trajectory-valid decision, and trajectory reason on all 90 frames. Both
+locked track ID 1 on frame 3 for 49 frames, entered `UNCERTAIN` once, and recorded
+31 `LOST` frames after the target was no longer verified. With a planner update
+forced on every locked frame, maximum absolute command-component difference was
+`0.007871` and mean absolute difference was `0.000597`. At the normal wall-clock
+planner cap, maximum difference was `0.043096`; the two machines can update/cache
+on different frames, so that number is not an isolated model-precision comparison.
+These are offline model-path results on current robot imagery, not end-to-end robot
+motion or a timing speedup.
+
+The live Thor split dry-run with a blue-basket holder captured 187 frames over about
+65 seconds: 93 `LOCKED`, 7 `UNCERTAIN`, 86 `LOST`, and 1 `SEARCHING`. There were
+31 planner updates during the 30.241-second locked span, about `1.03 Hz` observed,
+below the configured 2 Hz cap. Live status confirmed `target_valid`,
+`target_position_valid`, `trajectory_valid`, and `planner_ran` together during lock.
+Bridge pipeline median/p95 was `63.034/369.874 ms`; reported inference median/p95
+was `44.930/349.571 ms`. One response was rejected because its source camera frame
+exceeded the `0.75 s` freshness limit. The 20 Hz host control interval had
+median/p95/max `49.998/50.454/55.006 ms` over 1,277 intervals. The operator kept
+the physical E-stop active, so every control decision remained blocked and no
+physical motion was tested. The observed planner rate and isolated stale response
+need investigation before considering remote arming.
 
 The first live split dry-run on 2026-09-28 captured 117 no-person `SEARCHING`
 frames over approximately 39 seconds: target-view cadence `3.007 Hz`, reported
@@ -440,6 +467,13 @@ and [ROS 2 Jazzy supported platforms](https://www.openrobotics.org/blog/2024/5/r
   track on frame 3 with identical state and trajectory-valid decisions on all frames;
   maximum command-component difference was 0.003344. This is a narrow model-path
   comparison, not live planner timing or a moving-scene identity test.
+- Captured a live Thor blue-basket dry-run: 93 locked frames, 31 planner updates in
+  30.241 seconds of lock, valid depth and trajectory status, one stale-camera reply,
+  and a 55.006 ms maximum host control interval. The physical E-stop stayed active.
+- Replayed 90 fresh current-camera frames with the active prompt on Thor and RTX.
+  Identity and trajectory decisions matched on every frame, including loss; forced
+  per-frame planner outputs differed by at most 0.007871 per command component.
+  Earlier annotated footage was excluded from this current-project comparison.
 - Stopped Thor during a second dry-run with a held deadman. The bridge recorded
   `dry_run:inference_disconnected` and retained 20 Hz timing (52.744 ms maximum).
   Recovery and physical stopping still need verification.

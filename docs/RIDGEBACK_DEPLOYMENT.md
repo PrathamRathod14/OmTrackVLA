@@ -129,10 +129,10 @@ This project's Thor is `nvidia-thor-r100-0160.local` at `192.168.131.51` on the
 Ridgeback's `192.168.131.0/24` robot network. The Ridgeback computer uses
 `192.168.131.1` as its source address to reach it (`ip route get 192.168.131.51`).
 SSH confirmed Arm64 and JetPack 7.0, and the Thor Python environment confirmed a CUDA
-tensor operation on NVIDIA Thor. A real model load and a no-person live dry-run also
-passed. A fixed offline one-person replay reached target lock and the planner on
-both Thor and RTX with the same 10 valid trajectories; live locked-person behavior
-is still awaiting verification.
+tensor operation on NVIDIA Thor. A real model load, a no-person live dry-run, and a
+live blue-basket person-locked dry-run passed. A fresh 90-frame replay from the
+current Ridgeback camera matched all target and trajectory decisions on Thor and RTX;
+the physical E-stop remained active throughout the live trial.
 
 Only inference moves: Thor runs `inference_server.py`, target perception, model code,
 and the `models/` weights. The Ridgeback computer continues to run ROS 2 Jazzy,
@@ -182,9 +182,14 @@ existing safety gate stops output when inference is disconnected or stale.
 The first dry-run received 117 no-person frames at 3.007 Hz with a 50.932 ms maximum
 control interval. With the deadman published during a second dry-run, stopping the
 Thor server produced `dry_run:inference_disconnected` while the 20 Hz host control
-timer continued. Verify target lock, the 2 Hz planner, LiDAR freshness, reconnect
-behavior, and replay on moving Ridgeback frames before any armable trial. Keep the
-supervised armable launch on the current host until the Thor path passes the replay,
+timer continued. A later live blue-basket dry-run had 93 locked frames and valid
+target-position and trajectory status, with 31 planner updates across 30.241 seconds
+of lock (about 1.03 Hz). One stale-camera response was rejected; the host control
+interval maximum was 55.006 ms. A fresh 90-frame basket-holder replay matched target
+and trajectory decisions on Thor and RTX. Investigate the observed planner cadence,
+verify LiDAR freshness and reconnect behavior, and measure a matched full live RTX
+baseline before any armable trial. Keep the supervised armable launch on the current
+host until the Thor path passes the replay,
 timing, and physical safety gates in `docs/COMPUTE_PLACEMENT_PLAN.md`. The remote
 launcher rejects `OMTRACKVLA_ARM_OUTPUT=1` unless the operator also sets
 `OMTRACKVLA_ALLOW_REMOTE_ARM=1` after those gates pass.

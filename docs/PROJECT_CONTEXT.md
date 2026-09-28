@@ -271,6 +271,19 @@ but at the post-inference controller layer rather than inside upstream OmTrackVL
   interval median/p95/max was `49.999/50.234/52.694 ms` with no interval over 55 ms.
   It did not exercise Grounding DINO model inference or OmTrackVLA planning. See the
   compute plan for stage timings and GPU sampling limits.
+- A live Ridgeback-to-Thor dry-run with a blue-basket holder captured 187 frames:
+  93 `LOCKED`, 7 `UNCERTAIN`, 86 `LOST`, and 1 `SEARCHING`. During a 30.241-second
+  locked span, the planner updated 31 times (about 1.03 Hz, below its 2 Hz cap).
+  Target, depth-position, and trajectory validity were observed together. One
+  response was rejected for a stale source camera frame. The 20 Hz host control
+  interval median/p95/max was 49.998/50.454/55.006 ms over 1,277 intervals.
+  The physical E-stop stayed active, so this establishes dry-run behavior only.
+- On 90 fresh current-camera frames showing the basket holder and departure, Thor
+  and RTX matched every target state, track ID, target reason, and trajectory
+  validity/reason with the active prompt. Both first locked ID 1 on frame 3 and had
+  49 locked frames. With a planner update forced on each locked frame, the largest
+  absolute command-component difference was 0.007871. This offline replay excludes
+  ROS depth, LiDAR, motor safety, and network timing.
 - In that run, one planner-update frame took `0.418 s`; one cached-planner response
   took `0.032 s` inference and `0.048 s` total pipeline time. These are individual
   observations, not median/p95 live latency or proof of sustained planner cadence.
@@ -299,7 +312,7 @@ but at the post-inference controller layer rather than inside upstream OmTrackVL
 - The bridge is dry-run by default and stops on stale deadman, camera, LiDAR, inference,
   or E-stop data, an active E-stop, missing target lock, invalid target geometry,
   trajectory mismatch, obstacle, invalid values, or disconnection. The complete local
-  unit suite contains 59 tests; it does not replace live safety validation.
+  unit suite contains 62 tests; it does not replace live safety validation.
 - Same-frame prompt comparison produced similar forward commands for a black jacket,
   a white lab coat, a black chair, and an instruction to move away. The released
   OmTrackVLA checkpoint does not identify the prompted person or report target presence.
@@ -323,6 +336,15 @@ the launcher processes.
 
 ### 2026-09-28 (project-specific Thor inference split)
 
+- Captured a live person-locked Thor split dry-run with the physical E-stop active:
+  93 locked frames and 31 planner updates in a 30.241-second locked span. A stale
+  camera response was rejected and the host safety timer continued at 20 Hz.
+  Replayed 90 fresh basket-holder camera frames on Thor and RTX; all target and
+  trajectory decisions matched. Sustained 2 Hz planning, reconnect recovery, and
+  armable safety equivalence remain open; no end-to-end speedup is claimed.
+- Updated the tracked technical review deck's process-split and verified-results
+  slides with the Thor location, current camera evidence, 62-test count, and the
+  dry-run limits; the earlier unrelated recording was excluded.
 - Identified the attached `nvidia-thor-r100-0160.local` at `192.168.131.51` by mDNS
   and confirmed Arm64/JetPack 7.0 by SSH. The Ridgeback host routes to it from
   `192.168.131.1`.
@@ -336,9 +358,8 @@ the launcher processes.
   arming requires a second explicit `OMTRACKVLA_ALLOW_REMOTE_ARM=1` opt-in after
   the replay, timing, and physical safety gates pass.
 - A 39-second Thor split dry-run produced 117 SEARCHING frames at 3.007 Hz and
-  777 control intervals (50.932 ms maximum); motor output stayed disabled. The
-  live person-locked planner, reconnect recovery, and armable safety equivalence
-  remain unverified. This does not establish an end-to-end speed improvement.
+  777 control intervals (50.932 ms maximum); motor output stayed disabled. This
+  first run did not exercise the person-locked planner.
 - A second dry-run published the deadman at 10 Hz, then stopped the Thor server.
   The host bridge recorded 269 `dry_run:inference_disconnected` ticks with a
   52.744 ms maximum control interval. This checks the disconnect gate without
