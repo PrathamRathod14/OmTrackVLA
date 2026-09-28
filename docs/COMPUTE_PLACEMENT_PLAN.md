@@ -366,7 +366,7 @@ split, the process placement is:
 | Thor GPU, through CUDA | YOLO11n person model; Grounding DINO model; DINOv3 and SigLIP encoders and their shared CUDA image preprocessing; OmTrackVLA/Qwen3 visual projection and waypoint planner; token pooling and retained feature tensors. |
 | Thor CPU | Inference socket and JSON/JPEG handling; BoT-SORT association, optical flow, HSV clothing features and colour checks; grounding-box postprocessing, target identity state machine, diagnostic image drawing and JPEG encoding. |
 | Ridgeback computer CPU | ROS 2 subscriptions for camera, depth, LiDAR, E-stop and deadman; camera frame selection; depth localization; 75/25 leader/model command fusion; freshness, obstacle, speed and 20 Hz motor safety checks; `/cmd_vel`, status/path/image ROS publication and RViz. |
-| Ridgeback RTX 5060 | No project neural inference when the bridge is connected to Thor. The local inference path remains available as a separate launch mode. |
+| Ridgeback RTX 5060 | No project neural inference when the bridge is connected to Thor. RViz may still use GPU graphics rendering, and unrelated system processes may use the GPU. The local RTX inference path remains available as a separate launch mode. |
 
 `protocol.py` is used on both computers. The Ridgeback bridge sends a selected
 compressed RGB frame and prompt to Thor; Thor returns target state, annotated image,
@@ -573,6 +573,9 @@ and [ROS 2 Jazzy supported platforms](https://www.openrobotics.org/blog/2024/5/r
   upload, detector/result copies back to CPU, and CPU JSON/OpenCV/tracker work. The
   implementation uses one inference process and no custom CPU/GPU scheduler or
   zero-copy mechanism; the measured full-pipeline gate remains unchanged.
+- Clarified that switching inference to Thor removes this project's neural workload
+  from the Ridgeback RTX, not every possible use of that GPU; RViz graphics can
+  still use it, and the separate local inference launch retains the RTX path.
 - Audited the live host placement: the armable bridge was connected to the local
   loopback inference server, whose RTX process occupied `5,368 MiB`; Thor's separate
   server was listening without a client. Clarified that the implemented Thor split
