@@ -138,6 +138,11 @@ Selecting a CPU inference device automatically retains the legacy PIL/CPU proces
 Status: next action. Offline preprocessing timing is available, but live stage timing
 is still required.
 
+Execution order for the Thor comparison: instrument and record the RTX 5060 baseline
+first, freeze a replay scene and configuration, then run that same workload on Thor
+after its Arm64 environment and robot interfaces are validated. A Thor-only timing
+number without this baseline will not establish a speedup.
+
 - Add opt-in per-stage timings for transport/decode, target tracking, Grounding DINO,
   visual preprocessing, DINOv3, SigLIP, Qwen/waypoint inference, annotation/encode,
   ROS-side target geometry, fusion, and the 20 Hz control interval.
@@ -274,6 +279,8 @@ and [ROS 2 Jazzy supported platforms](https://www.openrobotics.org/blog/2024/5/r
 
 ### 2026-09-28
 
+- Set the next action for the Thor question: produce a repeatable RTX 5060
+  full-pipeline baseline before attempting an Arm64 port or comparing runtimes.
 - Expanded the Thor option into explicit Arm64 build, device-interface, replay,
   performance, power, and safety gates. No Thor hardware is attached and no speedup
   is claimed. The current RTX 5060 measurements remain the baseline.
