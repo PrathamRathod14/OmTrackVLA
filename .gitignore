@@ -26,3 +26,7 @@ ckpt*/
 output/
 log/
 real_robot/urg_node_overlay/
+
+# Machine-specific inference runtime and separately licensed model downloads.
+.conda-env/
+models/
