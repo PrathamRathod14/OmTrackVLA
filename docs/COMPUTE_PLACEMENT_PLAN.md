@@ -399,6 +399,45 @@ split, the process placement is:
 | Ridgeback computer CPU | ROS 2 subscriptions for camera, depth, LiDAR, E-stop and deadman; camera frame selection; depth localization; 75/25 leader/model command fusion; freshness, obstacle, speed and 20 Hz motor safety checks; `/cmd_vel`, status/path/image ROS publication and RViz. |
 | Ridgeback RTX 5060 | No project neural inference when the bridge is connected to Thor. RViz may still use GPU graphics rendering, and unrelated system processes may use the GPU. The local RTX inference path remains available as a separate launch mode. |
 
+### Placement choices if ROS 2 runs on both computers
+
+Thor has `/opt/ros/jazzy` installed, but this project's Thor inference service is
+currently a TCP socket process, **not a ROS node**. Installing/running ROS on both
+computers does not by itself split `inference_server.py` or change the current
+Ridgeback-to-Thor protocol. This table lists actual runtime modules and distinct
+stages; "either" means a proposed placement after adding and validating the needed
+inter-machine interface, not a launcher option available today.
+
+| Module or stage | Current Thor split | Placement choice with ROS on both | Practical boundary |
+| --- | --- | --- | --- |
+| RealSense color/depth and camera-info drivers (external ROS packages) | Ridgeback | Ridgeback near the attached camera | Moving the driver requires moving the physical interface; Thor can instead subscribe to selected images/depth over ROS. |
+| Two Hokuyo drivers, merged scan, E-stop/deadman and base driver (external ROS packages; patched `urg_node` overlay) | Ridgeback | Ridgeback near robot hardware | Keep the physical safety and motor interfaces local; Thor may subscribe to status/scan. The patched overlay has not been rebuilt for Arm64. |
+| Camera frame selection, 3 Hz rate gate, prompt/reset and inference client in `ridgeback_ros2_node.py` | Ridgeback CPU | Either, after extracting a separate front-end node | A Thor subscriber would receive camera frames over ROS; the current node also owns safety and cannot simply be relocated as a whole. |
+| YOLO11n person detector in `target_perception.py` | Thor GPU | Ridgeback RTX or Thor GPU | GPU placement may change, but the detector feeds the same-frame tracker and identity state. |
+| Grounding DINO prompt/attribute model in `target_perception.py` | Thor GPU | Ridgeback RTX or Thor GPU | Prefer placing it with YOLO and target identity; splitting them adds intermediate data transfer and synchronization. |
+| BoT-SORT, optical flow, HSV gallery and target state in `target_perception.py` | Thor CPU | CPU beside the chosen detector | Stateful identity must keep ordered frames and the same prompt/reset history; it is not an independent GPU job. |
+| DINOv3, SigLIP and shared image preprocessing in `inference_server.py`/`cache_gridpool.py` | Thor GPU | Ridgeback RTX or Thor GPU | Keep both encoders with token pooling, retained history and the waypoint model to avoid transferring feature tensors. |
+| Qwen3/OmTrackVLA waypoint model, token history and 2 Hz planner cache in `inference_server.py`/`open_trackvla_hf/` | Thor GPU | Ridgeback RTX or Thor GPU | Receives the verified target/image and returns only small waypoints; model weights must exist on the chosen host. |
+| Depth localization, trajectory checks and 75/25 target-command fusion in `target_geometry.py` plus `ridgeback_ros2_node.py` | Ridgeback CPU | Either CPU; Ridgeback preferred | Thor placement needs synchronized depth, intrinsics/extrinsics and target boxes across hosts, then a fresh result back to Ridgeback. |
+| LiDAR corridor, E-stop/deadman, freshness, speed/acceleration gates in `safety.py` and the 20 Hz `ridgeback_ros2_node.py` timer | Ridgeback CPU | Ridgeback for the final gate | A remote planner or optional remote precheck may propose motion, but the final fail-closed check and sole `/cmd_vel` publisher stay beside the base. |
+| Target/status/path ROS publication and RViz display | Ridgeback | Either host can display/subscribe; publication can be moved with a new node | Keep one authoritative publisher per result; measure annotated-image traffic if sending it twice. |
+| `protocol.py` and `perf_log.py` | Both hosts | Follow their client/server or instrumented process | Support modules, not compute-heavy candidates. `gpu_ops.py` is benchmarked but not on the live path. |
+
+The simplest *proposed* two-GPU boundary is perception (YOLO, Grounding DINO,
+tracking/identity) on Ridgeback's RTX/CPU and the vision encoders plus waypoint
+model on Thor's GPU. This requires splitting the current monolithic
+`OmTrackInference` server into separately addressable processes or ROS nodes and
+carrying frame ID/time, prompt/reset generation, target state/bbox, image and
+waypoint provenance across the boundary. ROS topics, services or actions could
+carry that data, but cross-host discovery, matching QoS, clock/freshness handling,
+and single ownership of `/cmd_vel` must be tested. In particular, two ROS installs
+do not make the current Python model stages independently movable.
+
+Current decision: keep the existing Thor single-server dry-run and the local RTX
+armable mode until matched full-pipeline measurements identify a reason to implement
+this new boundary. The hardware-bound drivers and final Ridgeback safety gate remain
+on Ridgeback in either design.
+
 `protocol.py` is used on both computers. The Ridgeback bridge sends a selected
 compressed RGB frame and prompt to Thor; Thor returns target state, annotated image,
 raw waypoints and provenance. Ridgeback combines that result with its local depth
@@ -626,6 +665,11 @@ and [ROS 2 Jazzy supported platforms](https://www.openrobotics.org/blog/2024/5/r
 
 ### 2026-09-28
 
+- Mapped the project modules under a hypothetical ROS-on-both-hosts topology. Thor
+  has ROS 2 Jazzy installed, but the running inference server remains a TCP service.
+  Detector/identity and vision/planner are the meaningful relocatable groups;
+  camera/LiDAR/base drivers and the final 20 Hz safety gate remain on Ridgeback.
+  A two-GPU ROS boundary needs new processes/interfaces and is not implemented.
 - Compared the two attached computers from fresh `lscpu`, `free`, GPU and Thor
   power-mode snapshots. Ridgeback has an 8-core i7-9700TE, 31 GiB RAM, and an RTX
   5060 with 8,151 MiB dedicated VRAM; Thor has 14 Arm cores and 122 GiB Linux-visible
