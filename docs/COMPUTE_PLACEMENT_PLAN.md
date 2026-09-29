@@ -162,6 +162,17 @@ pipeline.
 
 The isolated upload was `0.278 ms` and CUDA HSV conversion on an already resident
 frame was `0.533 ms`. Small per-box kernels and synchronization dominate this workload.
+This measures the clothing-colour feature path, not the entire BoT-SORT update.
+In this repository `target_perception.py` copies YOLO boxes to NumPy, supplies
+NumPy appearance features to Ultralytics BoT-SORT, and uses its NumPy matching,
+Kalman state and OpenCV sparse optical flow. The tracker's `device="cuda"` option
+only selects a device for an optional learned ReID encoder; with `model="auto"`,
+the supplied HSV features are reused and the tracker itself remains CPU-side.
+Moving the complete tracker to GPU would require a different implementation and
+validation of track IDs through occlusion/reacquisition. For the present small
+person counts, retain BoT-SORT on Ridgeback CPU; profile its full update with
+visible people before considering such a rewrite. A GPU learned ReID encoder is
+a separate identity-quality experiment, not a way to put all of BoT-SORT on GPU.
 All 57 safety, geometry, target-perception and GPU-equivalence tests passed after the
 audit.
 After the shared vision-preprocessing tests were added, the complete local suite has
@@ -718,6 +729,11 @@ and [ROS 2 Jazzy supported platforms](https://www.openrobotics.org/blog/2024/5/r
 
 ### 2026-09-29
 
+- Reviewed the BoT-SORT GPU question against the installed tracker and this project's
+  call path. The configured `device` does not move NumPy matching, Kalman updates,
+  sparse optical flow or supplied HSV features to CUDA. Keep this small stateful
+  stage on Ridgeback CPU pending a live people-visible stage profile; the existing
+  CUDA HSV microbenchmark was slower than OpenCV CPU and does not time all of BoT-SORT.
 - Reviewed the hybrid placement rationale and prioritized a matched live locked-target
   comparison before further migration. Current live hybrid evidence covers searching
   only; the 75/25 command fusion and final safety gate remain on Ridgeback CPU.
