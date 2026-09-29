@@ -756,6 +756,17 @@ and [ROS 2 Jazzy supported platforms](https://www.openrobotics.org/blog/2024/5/r
 
 ### 2026-09-29
 
+- Reviewed four 39.5-second local RTX fusion trials at 2 Hz status cadence.
+  Status-sampled inference median/p95 was 35.5/214, 257/318, 36.1/262, and
+  34.2/69.0 ms; bridge pipeline median/p95 was 52.9/232, 259/321,
+  54.9/264, and 55.4/96.1 ms for 25%, 75%, 100% OmTrackVLA and 100%
+  target-direction trials respectively. Prompt, target-lock duration and scene
+  differed; these are diagnostic status samples, not matched full-pipeline
+  measurements or evidence that a fusion weight changed compute performance.
+  During an `obstacle_too_close` controller command gap in the last run, odometry
+  moved 0.63 m. The next capture must include all `twist_mux` inputs and
+  `platform/cmd_vel` alongside gate timing before any compute or motion conclusion.
+  See `docs/RUN_REPORT_2026-09-29_OMTRACK75.md`.
 - A 39.5-second local RTX armable observation after the ROS argument fix recorded
   80 status samples. Status-sampled inference median/p95 was 35/214 ms and bridge
   pipeline median/p95 was 53/231 ms. The 2 Hz status topic can miss or repeat 3 Hz

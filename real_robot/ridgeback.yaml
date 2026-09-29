@@ -37,8 +37,8 @@
     min_follow_distance: 0.9
     retreat_tolerance: 0.05
     reject_path_retreat: false
-    # Target fusion retains aligned OmTrackVLA motion as a detour component, but
-    # replaces an opposite proposal with motion toward the locked leader.
+    # For aligned proposals, blend 75% depth-localized target direction/yaw with
+    # 25% OmTrackVLA direction/yaw; opposite proposals use target direction.
     enable_target_fusion: true
     fusion_target_weight: 0.75
     fusion_linear_gain: 0.4

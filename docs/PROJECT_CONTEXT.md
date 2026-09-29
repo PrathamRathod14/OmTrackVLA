@@ -207,6 +207,12 @@ For trials, still start with the leader fully visible and distinguishable from o
 
 ## Current safety configuration
 
+- Target command fusion blends 75% depth-localized locked-target direction and yaw
+  with 25% OmTrackVLA direction and yaw when the model proposes motion generally
+  toward the leader (`fusion_target_weight: 0.75`). An opposite or perpendicular
+  model proposal is replaced with the target direction. A fresh planner result,
+  target lock, depth and the `0.9 m` follow distance remain required; the model's
+  raw command magnitude can cap translational speed.
 - Dry-run is the default.
 - Armable mode requires `OMTRACKVLA_ARM_OUTPUT=1`.
 - Deadman messages must remain fresh within `0.5 s`.
@@ -369,6 +375,102 @@ physical E-stop reachable. Press Ctrl+C to stop the foreground deadman and shut 
 the launcher processes.
 
 ## Change log
+
+### 2026-09-29 (restore 75% target / 25% OmTrackVLA setting)
+
+- Set `fusion_target_weight` from `1.0` back to `0.75` for the next restarted
+  controller run. Aligned OmTrackVLA direction and yaw again contribute 25% to
+  the fused command; target geometry contributes 75%. The prompt, speed
+  calculation, following distance and safety gates are unchanged. The prior
+  four-run report remains historical evidence, not a verification of this
+  newly restarted setting.
+
+### 2026-09-29 (live target 100% direction trial observation)
+
+- A detailed replay of the read-only capture found an unresolved command-authority
+  discrepancy: during a 9.45-second gap after the OmTrackVLA controller's zero
+  `/cmd_vel` burst for `obstacle_too_close`, wheel odometry changed by 0.63 m and
+  reported up to 0.291 m/s. `twist_mux` has higher-priority joystick, RC, and
+  interactive-marker inputs, but their historical messages, `platform/cmd_vel`,
+  and motor feedback were not captured. The operator later recalled the joystick
+  may have been used for much of the last run, without confirmed timing. Joystick
+  override is plausible but unverified. The gate's zero command cannot be
+  presented as a verified platform stop in this interval. Capture all command
+  sources and mux output before another armable weight comparison.
+- The running node confirmed `fusion_target_weight=1.0` and the black T-shirt
+  prompt. In a 39.5-second read-only observation, all 80 status samples stayed
+  `LOCKED` on track ID 20. Wheel odometry changed by 4.26 m between endpoints.
+  The gate reported `ready` 24 times, `ready_rotation_suppressed` 30 times,
+  and `obstacle_too_close` 26 times; all obstacle stops reported zero *controller*
+  command.
+  A sampled Target Tracker image showed the intended black-shirted person in
+  the green box. Depth-estimated target distance ranged 1.31–2.53 m, without
+  independent ground truth. No `scan_stale` status appeared. The model still
+  affected the speed cap and its fresh planner result was required, but its
+  route did not steer the robot. This is not a controlled comparison
+  with prior weights; see `docs/RUN_REPORT_2026-09-29_OMTRACK75.md` for four runs.
+
+### 2026-09-29 (target 100% command-direction trial setting)
+
+- Changed `fusion_target_weight` from `0.0` to `1.0`, so the fused translation
+  direction and yaw come entirely from the depth-localized locked leader. The
+  OmTrackVLA proposal still enters the speed cap and a fresh planner result is
+  required. The raw model path's target-consistency result is recorded as a
+  diagnostic; with fusion enabled it does not gate the target-led command.
+  The deadman, E-stop, LiDAR,
+  freshness, speed limits and 0.9 m follow distance remain active. This setting
+  has not yet been observed in a restarted live run.
+
+### 2026-09-29 (live OmTrackVLA 100% trial observation)
+
+- The running node confirmed `fusion_target_weight=0.0` and the black T-shirt
+  prompt. In 80 status samples over 39.5 seconds, 68 were `LOCKED`, 7
+  `UNCERTAIN`, and 5 `LOST`; 12 `target_not_locked` samples reported zero
+  command. Wheel odometry changed by 2.17 m between endpoints. One sampled
+  Target Tracker image showed the black-shirted person locked, and no
+  `scan_stale` status appeared. In 41 locked samples the depth-estimated target
+  distance was at or below 0.9 m and translation was zero; the minimum estimate
+  was 0.506 m without independent distance ground truth. The 100% model
+  direction applied in 26 aligned, outside-distance status samples. This is
+  observed motion, not a controlled weight or following-accuracy comparison.
+  See `docs/RUN_REPORT_2026-09-29_OMTRACK75.md` for the four-run comparison.
+
+### 2026-09-29 (OmTrackVLA 100% aligned-command trial setting)
+
+- Changed `fusion_target_weight` from `0.25` to `0.0`. When the model proposes
+  motion with a positive component toward the locked leader, fused direction and
+  yaw now follow OmTrackVLA entirely. The controller still requires target lock
+  and valid depth, replaces opposite/perpendicular motion toward the leader, and
+  stops translation within `0.9 m`. Deadman, E-stop, LiDAR, speed and freshness
+  gates remain active. This setting has not yet been observed in a live run.
+
+### 2026-09-29 (fusion trial report comparison)
+
+- Expanded `docs/RUN_REPORT_2026-09-29_OMTRACK75.md` into a side-by-side report
+  of the earlier 25% OmTrackVLA / 75% target blue-basket run and the later 75%
+  OmTrackVLA / 25% target black-shirt run. Their prompts and scenes differed, so
+  the report does not attribute the motion difference to the fusion weight.
+
+### 2026-09-29 (live OmTrackVLA 75% trial observation)
+
+- The running node confirmed `fusion_target_weight=0.25` and the black T-shirt
+  prompt. In a 39.5-second supervised observation, 56/80 status samples were
+  `LOST`, 20/80 `UNCERTAIN`, and only 4/80 `LOCKED`. The motion gate was
+  `target_not_locked` in 76/80 samples. Wheel odometry changed by 0.109 m,
+  primarily during short lock intervals. One annotated frame showed a black-shirt
+  grounding box but `prompt_match_appearance_differs`; a sampled appearance score
+  of 0.705 fell below the 0.72 recovery threshold. Track ID changed from 37 to 55.
+  This trial does not establish a navigation improvement from the new weight because
+  identity was unstable and the previous run used another prompt and scene. See
+  `docs/RUN_REPORT_2026-09-29_OMTRACK75.md`.
+
+### 2026-09-29 (OmTrackVLA-led fusion trial setting)
+
+- Changed `fusion_target_weight` from `0.75` to `0.25`, giving aligned
+  OmTrackVLA direction and yaw 75% of the blend and target geometry 25%.
+  This is a configuration change for the next restarted controller run, not a
+  verified improvement in following. The fail-closed target, LiDAR, E-stop and
+  deadman gates, speed calculation and `0.9 m` follow distance remain in place.
 
 ### 2026-09-29 (active prompt changed to black T-shirt)
 
