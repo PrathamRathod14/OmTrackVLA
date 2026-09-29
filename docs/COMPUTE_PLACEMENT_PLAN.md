@@ -149,6 +149,15 @@ local until the remote cadence, reconnection, and safety gates pass.
 
 ## Verified placement experiment
 
+The clothing-colour feature is an identity cue, not a compute goal. Grounding DINO
+first checks the prompt (for example, the person holding the blue basket); the
+three-body-stripe HSV signature then helps BoT-SORT and the target gallery keep
+that same person across frames. If the original track disappears, recovery also
+checks the prompt and appearance before locking a replacement track. The signature
+describes the person's visible clothing, not the basket itself, and people in
+similar clothing can still be ambiguous. CPU/GPU placement should preserve this
+identity behavior while meeting the robot's timing budget.
+
 The CUDA colour path was rechecked on 2026-09-28 at `848 x 480`, median of 50 runs.
 The timing includes frame upload and the result copy because both occur in the real
 pipeline.
@@ -729,6 +738,10 @@ and [ROS 2 Jazzy supported platforms](https://www.openrobotics.org/blog/2024/5/r
 
 ### 2026-09-29
 
+- Clarified why the HSV feature exists: it supports same-person tracking and
+  reacquisition after the prompt identifies the leader. Its CPU/GPU benchmark
+  selects an implementation for that feature; it does not establish whole-tracker
+  performance or prove that clothing alone identifies a person.
 - Reviewed the BoT-SORT GPU question against the installed tracker and this project's
   call path. The configured `device` does not move NumPy matching, Kalman updates,
   sparse optical flow or supplied HSV features to CUDA. Keep this small stateful
