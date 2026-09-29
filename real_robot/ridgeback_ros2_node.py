@@ -26,6 +26,7 @@ from std_msgs.msg import Bool, Empty, String
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from protocol import receive_message, send_message
+from hybrid_protocol import combine_replies, target_payload
 from perf_log import PerfLog
 from safety import Command, SafetyConfig, SafetyState, directional_obstacle_distance, evaluate, is_fresh, rate_limit
 from target_geometry import CameraGeometry, extrinsics_rotation, fuse_target_command, locate_target, trajectory_follows_target
@@ -49,6 +50,8 @@ class RidgebackController(Node):
         self._wake_worker = threading.Event()
         self._shutdown = threading.Event()
         self._socket: Optional[socket.socket] = None
+        self._perception_socket: Optional[socket.socket] = None
+        self._hybrid = bool(str(self.get_parameter("perception_host").value))
         self._request_id = 0
         self._latest_jpeg: Optional[bytes] = None
         # (raw message bytes, receive time, is_compressed); decoded only when needed
@@ -199,6 +202,8 @@ class RidgebackController(Node):
             "prompt": "Follow the person directly in front of you.",
             "inference_host": "127.0.0.1",
             "inference_port": 18765,
+            "perception_host": "",
+            "perception_port": 18766,
             "inference_rate": 3.0,
             "planner_cache_timeout": 0.75,
             "control_rate": 20.0,
@@ -467,9 +472,7 @@ class RidgebackController(Node):
             self._latest_frame_id += 1
         self._wake_worker.set()
 
-    def _connect(self) -> socket.socket:
-        host = str(self.get_parameter("inference_host").value)
-        port = int(self.get_parameter("inference_port").value)
+    def _connect(self, host: str, port: int) -> socket.socket:
         timeout = float(self.get_parameter("socket_timeout").value)
         connection = socket.create_connection((host, port), timeout=timeout)
         connection.settimeout(timeout)
@@ -492,24 +495,54 @@ class RidgebackController(Node):
             stages_ms = {}
             try:
                 if self._socket is None:
-                    self._socket = self._connect()
                     host = str(self.get_parameter("inference_host").value)
                     port = int(self.get_parameter("inference_port").value)
+                    self._socket = self._connect(host, port)
                     self.get_logger().info(f"Connected to OmTrackVLA inference server at {host}:{port}")
+                if self._hybrid and self._perception_socket is None:
+                    perception_host = str(self.get_parameter("perception_host").value)
+                    perception_port = int(self.get_parameter("perception_port").value)
+                    self._perception_socket = self._connect(perception_host, perception_port)
+                    self.get_logger().info(
+                        f"Connected to Ridgeback RTX perception at {perception_host}:{perception_port}"
+                    )
                 self._request_id += 1
                 transport_started = time.perf_counter()
-                send_message(self._socket, {
+                request = {
                     "request_id": self._request_id,
+                    "frame_id": frame_id,
                     "prompt": prompt,
                     "reset_target": reset_target,
                     "encoding": "jpeg",
                     "image_b64": base64.b64encode(jpeg).decode("ascii"),
-                })
-                stages_ms["request_encode_send"] = (time.perf_counter() - transport_started) * 1000.0
+                }
+                perception_response = None
+                if self._hybrid:
+                    stages_ms["request_encode"] = (time.perf_counter() - transport_started) * 1000.0
+                    perception_started = time.perf_counter()
+                    send_message(self._perception_socket, request)
+                    perception_response = receive_message(self._perception_socket)
+                    request["target"] = target_payload(perception_response, self._request_id, frame_id)
+                    if request["target"]["target_valid"] is False:
+                        request["encoding"] = "none"
+                        del request["image_b64"]
+                    stages_ms["perception_wait"] = (time.perf_counter() - perception_started) * 1000.0
+                    if not is_fresh(self._now(), frame_stamp, float(self.get_parameter("camera_timeout").value)):
+                        raise RuntimeError("perception response belongs to a stale camera frame")
+                    planner_send_started = time.perf_counter()
+                send_message(self._socket, request)
+                if self._hybrid:
+                    stages_ms["planner_send"] = (time.perf_counter() - planner_send_started) * 1000.0
+                else:
+                    stages_ms["request_encode_send"] = (time.perf_counter() - transport_started) * 1000.0
                 response_started = time.perf_counter()
                 response = receive_message(self._socket)
-                stages_ms["response_wait"] = (time.perf_counter() - response_started) * 1000.0
-                if response.get("request_id") != self._request_id or not response.get("ok"):
+                stages_ms["planner_wait" if self._hybrid else "response_wait"] = (
+                    time.perf_counter() - response_started
+                ) * 1000.0
+                if self._hybrid:
+                    response = combine_replies(perception_response, response, self._request_id, frame_id)
+                elif response.get("request_id") != self._request_id or not response.get("ok"):
                     raise RuntimeError(str(response.get("error", "invalid inference response")))
                 if not is_fresh(
                     self._now(), frame_stamp, float(self.get_parameter("camera_timeout").value)
@@ -624,12 +657,25 @@ class RidgebackController(Node):
                     self._clear_prediction_locked()
                     self._inference_connected = False
                     self._inference_error = f"{type(exc).__name__}: {exc}"
+                    if self._hybrid:
+                        # Reacquire identity and restart Thor's planner history after either side fails.
+                        self._reset_target_requested = True
+                        self._target = {
+                            "target_state": "UNCERTAIN",
+                            "target_reason": "hybrid_inference_error",
+                        }
                 if self._socket is not None:
                     try:
                         self._socket.close()
                     except OSError:
                         pass
                     self._socket = None
+                if self._perception_socket is not None:
+                    try:
+                        self._perception_socket.close()
+                    except OSError:
+                        pass
+                    self._perception_socket = None
                 time.sleep(0.2)
 
     def _clear_prediction_locked(self) -> None:
@@ -933,6 +979,11 @@ class RidgebackController(Node):
         if self._socket is not None:
             try:
                 self._socket.close()
+            except OSError:
+                pass
+        if self._perception_socket is not None:
+            try:
+                self._perception_socket.close()
             except OSError:
                 pass
         if not bool(self.get_parameter("dry_run").value) and rclpy.ok():

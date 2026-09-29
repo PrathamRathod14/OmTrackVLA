@@ -8,12 +8,14 @@ import base64
 from collections import deque
 import json
 import ipaddress
+import math
 import os
 from pathlib import Path
 import socket
 import sys
 import time
 from typing import Optional
+from types import SimpleNamespace
 
 import cv2
 import numpy as np
@@ -22,9 +24,9 @@ import torch
 PROJECT_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_DIR))
 
-from protocol import receive_message, send_message
-from perf_log import PerfLog, timed
-from target_perception import TargetPerception, trajectory_is_directionally_consistent
+from real_robot.protocol import receive_message, send_message
+from real_robot.perf_log import PerfLog, timed
+from real_robot.target_perception import TargetPerception, trajectory_is_directionally_consistent
 
 
 class OmTrackInference:
@@ -44,7 +46,11 @@ class OmTrackInference:
         planner_rate: float = 2.0,
         target_view_width: int = 512,
         cuda_vision_preprocess: bool = True,
+        mode: str = "full",
     ):
+        if mode not in ("full", "perception", "planner"):
+            raise ValueError(f"unsupported inference mode: {mode}")
+        self.mode = mode
         self.project_dir = project_dir
         self.device = torch.device(device)
         self.history = history
@@ -61,43 +67,45 @@ class OmTrackInference:
         self.last_planner_command: Optional[list] = None
         self.last_planner_trajectory: Optional[list] = None
 
-        checkpoint = project_dir / "models" / "OmTrackVLA-0.6B"
-        qwen = project_dir / "models" / "Qwen3-0.6B"
-        dino = project_dir / "models" / "dinov3-vits16-pretrain-lvd1689m"
-        siglip = project_dir / "models" / "siglip-so400m-patch14-384"
-        required = [
-            checkpoint / "model.safetensors",
-            qwen / "model.safetensors",
-            dino / "model.safetensors",
-            siglip / "model.safetensors",
-        ]
-        missing = [str(path) for path in required if not path.is_file()]
-        if missing:
-            raise FileNotFoundError("missing model files:\n  " + "\n  ".join(missing))
+        if mode != "perception":
+            checkpoint = project_dir / "models" / "OmTrackVLA-0.6B"
+            qwen = project_dir / "models" / "Qwen3-0.6B"
+            dino = project_dir / "models" / "dinov3-vits16-pretrain-lvd1689m"
+            siglip = project_dir / "models" / "siglip-so400m-patch14-384"
+            required = [
+                checkpoint / "model.safetensors",
+                qwen / "model.safetensors",
+                dino / "model.safetensors",
+                siglip / "model.safetensors",
+            ]
+            missing = [str(path) for path in required if not path.is_file()]
+            if missing:
+                raise FileNotFoundError("missing model files:\n  " + "\n  ".join(missing))
 
-        os.environ["DINOV3_MODEL_PATH"] = str(dino)
-        os.environ["SIGLIP_MODEL_PATH"] = str(siglip)
-        from cache_gridpool import VisionCacheConfig, VisionFeatureCacher, grid_pool_tokens
-        from open_trackvla_hf import OpenTrackVLAConfig, OpenTrackVLAForWaypoint
+            os.environ["DINOV3_MODEL_PATH"] = str(dino)
+            os.environ["SIGLIP_MODEL_PATH"] = str(siglip)
+            from cache_gridpool import VisionCacheConfig, VisionFeatureCacher, grid_pool_tokens
+            from open_trackvla_hf import OpenTrackVLAConfig, OpenTrackVLAForWaypoint
 
-        config = OpenTrackVLAConfig.from_pretrained(str(checkpoint))
-        config.llm_name = str(qwen)
-        self.planner = OpenTrackVLAForWaypoint.from_pretrained(
-            str(checkpoint), config=config, low_cpu_mem_usage=True
-        ).eval().to(self.device)
-        vision_config = VisionCacheConfig(image_size=384, batch_size=1, device=str(self.device))
-        self.vision = VisionFeatureCacher(vision_config).eval()
-        self.grid_pool_tokens = grid_pool_tokens
-        self.target_perception = TargetPerception(
-            project_dir,
-            device=device,
-            grounding_box_threshold=grounding_box_threshold,
-            grounding_text_threshold=grounding_text_threshold,
-            person_threshold=person_threshold,
-            grounding_interval=grounding_interval,
-            acquire_frames=target_acquire_frames,
-            reid_match_threshold=reid_match_threshold,
-        )
+            config = OpenTrackVLAConfig.from_pretrained(str(checkpoint))
+            config.llm_name = str(qwen)
+            self.planner = OpenTrackVLAForWaypoint.from_pretrained(
+                str(checkpoint), config=config, low_cpu_mem_usage=True
+            ).eval().to(self.device)
+            vision_config = VisionCacheConfig(image_size=384, batch_size=1, device=str(self.device))
+            self.vision = VisionFeatureCacher(vision_config).eval()
+            self.grid_pool_tokens = grid_pool_tokens
+        if mode != "planner":
+            self.target_perception = TargetPerception(
+                project_dir,
+                device=device,
+                grounding_box_threshold=grounding_box_threshold,
+                grounding_text_threshold=grounding_text_threshold,
+                person_threshold=person_threshold,
+                grounding_interval=grounding_interval,
+                acquire_frames=target_acquire_frames,
+                reid_match_threshold=reid_match_threshold,
+            )
 
     def reset(self) -> None:
         self.coarse_history.clear()
@@ -124,20 +132,27 @@ class OmTrackInference:
         return base64.b64encode(encoded_jpeg.tobytes()).decode("ascii")
 
     @torch.inference_mode()
-    def infer(self, rgb: np.ndarray, prompt: str, reset_target: bool = False, stages: Optional[dict] = None) -> dict:
+    def infer(self, rgb: np.ndarray, prompt: str, reset_target: bool = False,
+              stages: Optional[dict] = None, target_override: Optional[dict] = None) -> dict:
         synchronize = (lambda: torch.cuda.synchronize(self.device)) if stages is not None and self.device.type == "cuda" else None
         stage_timer = lambda name: timed(stages, name, synchronize)
         if reset_target:
-            self.target_perception.reset()
+            if self.mode != "planner":
+                self.target_perception.reset()
+            self.reset()
             self.target_was_valid = False
         if prompt != self.last_prompt:
             self.reset()
-            self.target_perception.reset()
+            if self.mode != "planner":
+                self.target_perception.reset()
             self.last_prompt = prompt
             self.target_was_valid = False
 
-        with stage_timer("target_total"):
-            target = self.target_perception.update(rgb, prompt, stage_timer=stage_timer)
+        if self.mode == "planner":
+            target = validate_external_target(target_override, rgb.shape)
+        else:
+            with stage_timer("target_total"):
+                target = self.target_perception.update(rgb, prompt, stage_timer=stage_timer)
         result = {
             "target_query": target.query,
             "target_state": target.state,
@@ -151,6 +166,10 @@ class OmTrackInference:
             "target_people_count": target.people_count,
             "target_debug": target.debug,
         }
+        if self.mode == "perception":
+            with stage_timer("target_view_encode"):
+                result["target_image_b64"] = self._encode_target_view(target.annotated_bgr)
+            return result
         if not target.valid:
             if self.target_was_valid:
                 self.reset()
@@ -164,8 +183,9 @@ class OmTrackInference:
                 "trajectory_valid": False,
                 "trajectory_reason": "target_not_locked",
             })
-            with stage_timer("target_view_encode"):
-                result["target_image_b64"] = self._encode_target_view(target.annotated_bgr)
+            if self.mode != "planner":
+                with stage_timer("target_view_encode"):
+                    result["target_image_b64"] = self._encode_target_view(target.annotated_bgr)
             return result
         if not self.target_was_valid:
             self.reset()
@@ -240,9 +260,47 @@ class OmTrackInference:
             "trajectory_valid": bool(target.valid and trajectory_valid),
             "trajectory_reason": trajectory_reason if target.valid else "target_not_locked",
         })
-        with stage_timer("target_view_encode"):
-            result["target_image_b64"] = self._encode_target_view(target.annotated_bgr)
+        if self.mode != "planner":
+            with stage_timer("target_view_encode"):
+                result["target_image_b64"] = self._encode_target_view(target.annotated_bgr)
         return result
+
+
+def validate_external_target(value: object, image_shape: tuple) -> SimpleNamespace:
+    """Accept only an explicit same-frame identity result from the Ridgeback detector."""
+    if not isinstance(value, dict):
+        raise ValueError("planner mode requires a target result")
+    state = value.get("target_state")
+    valid = value.get("target_valid")
+    if state not in ("SEARCHING", "LOCKED", "UNCERTAIN", "LOST") or type(valid) is not bool:
+        raise ValueError("invalid target state or validity")
+    bbox = value.get("target_bbox")
+    track_id = value.get("target_track_id")
+    if valid:
+        if state != "LOCKED" or type(track_id) is not int:
+            raise ValueError("a valid target requires a locked track")
+        if not isinstance(bbox, list) or len(bbox) != 4 or any(
+            type(number) not in (int, float) or not math.isfinite(number) for number in bbox
+        ):
+            raise ValueError("a valid target requires a finite bounding box")
+        x1, y1, x2, y2 = bbox
+        height, width = image_shape[:2]
+        # YOLO float boxes can overshoot an image edge by a fraction of a pixel.
+        if not (-1 <= x1 < x2 <= width + 1 and -1 <= y1 < y2 <= height + 1):
+            raise ValueError("target bounding box is outside the frame")
+    return SimpleNamespace(
+        query=str(value.get("target_query", ""))[:256],
+        state=state,
+        valid=valid,
+        reason=str(value.get("target_reason", ""))[:256],
+        track_id=track_id,
+        bbox=bbox,
+        grounding_score=value.get("target_grounding_score"),
+        person_score=value.get("target_person_score"),
+        reid_similarity=value.get("target_reid_similarity"),
+        people_count=value.get("target_people_count"),
+        debug=value.get("target_debug"),
+    )
 
 
 def decode_request_image(request: dict) -> np.ndarray:
@@ -256,6 +314,17 @@ def decode_request_image(request: dict) -> np.ndarray:
     if bgr is None:
         raise ValueError("JPEG decode failed")
     return cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+
+
+def decode_request_for_mode(request: dict, mode: str) -> np.ndarray:
+    if mode == "planner" and request.get("encoding") == "none":
+        target = request.get("target")
+        if not isinstance(target, dict) or target.get("target_valid") is not False:
+            raise ValueError("image-free planner request requires an invalid target")
+        # The planner only consumes images for a verified LOCKED target. A tiny
+        # placeholder lets the loss/reset path run without resending a camera JPEG.
+        return np.empty((1, 1, 3), dtype=np.uint8)
+    return decode_request_image(request)
 
 
 def serve(args: argparse.Namespace) -> None:
@@ -280,12 +349,14 @@ def serve(args: argparse.Namespace) -> None:
         args.planner_rate,
         args.target_view_width,
         not args.legacy_vision_preprocess,
+        args.mode,
     )
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     server.bind((args.host, args.port))
     server.listen(1)
-    print(json.dumps({"status": "ready", "host": args.host, "port": args.port, "dummy": args.dummy}), flush=True)
+    print(json.dumps({"status": "ready", "host": args.host, "port": args.port,
+                      "dummy": args.dummy, "mode": args.mode}), flush=True)
     while True:
         connection, address = server.accept()
         if address[0] != allowed_client:
@@ -303,7 +374,7 @@ def serve(args: argparse.Namespace) -> None:
                     if not prompt:
                         raise ValueError("prompt is empty")
                     with timed(stages, "jpeg_decode"):
-                        image = decode_request_image(request)
+                        image = decode_request_for_mode(request, args.mode)
                     if model is None:
                         result = {
                             "planner_ran": False,
@@ -318,10 +389,13 @@ def serve(args: argparse.Namespace) -> None:
                             "trajectory_reason": "dummy_inference",
                         }
                     else:
-                        result = model.infer(image, prompt, bool(request.get("reset_target")), stages=stages)
+                        result = model.infer(image, prompt, bool(request.get("reset_target")),
+                                             stages=stages, target_override=request.get("target"))
                     response = {
                         "ok": True,
                         "request_id": request_id,
+                        "frame_id": request.get("frame_id"),
+                        "mode": args.mode,
                         "inference_seconds": time.monotonic() - started,
                     }
                     response.update(result)
@@ -334,6 +408,8 @@ def serve(args: argparse.Namespace) -> None:
                     send_message(connection, {
                         "ok": False,
                         "request_id": request_id,
+                        "frame_id": request.get("frame_id"),
+                        "mode": args.mode,
                         "error": f"{type(exc).__name__}: {exc}",
                     })
         except (ConnectionError, OSError, ValueError):
@@ -349,6 +425,7 @@ def parse_args() -> argparse.Namespace:
                         help="Only accept connections from this Ridgeback IPv4 address")
     parser.add_argument("--port", type=int, default=18765)
     parser.add_argument("--device", default="cuda")
+    parser.add_argument("--mode", choices=("full", "perception", "planner"), default="full")
     parser.add_argument("--history", type=int, default=31)
     parser.add_argument("--prediction-dt", type=float, default=0.1)
     parser.add_argument("--waypoint-index", type=int, default=1)

@@ -44,6 +44,10 @@
     fusion_minimum_speed: 0.04
     fusion_yaw_gain: 0.8
     inference_port: 18765
+    # Empty keeps the existing single inference server. The two-GPU dry-run
+    # launcher overrides this with Ridgeback loopback perception on port 18766.
+    perception_host: ""
+    perception_port: 18766
     # Smooth target view without increasing the heavy planner load: tracking/display
     # runs at 3 Hz, while OmTrackVLA remains 2 Hz in inference_server.py. Grounding
     # DINO runs every eighth tracking frame while searching/recovering (~0.375 Hz).

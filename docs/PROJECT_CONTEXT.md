@@ -1,6 +1,6 @@
 # OmTrackVLA Ridgeback Project Context
 
-Last updated: 2026-09-28
+Last updated: 2026-09-29
 
 This is the living handoff record for the OmTrackVLA deployment on Clearpath Ridgeback
 `r100-0160`. Update it in the same change whenever the real-robot implementation,
@@ -61,8 +61,15 @@ working:
   plus the target-manager state and RGB trajectory-consistency result for the same frame.
   The locally added Thor split can run this process under Python 3.12/CUDA on Arm64,
   bound to `192.168.131.51` and allowing only the Ridgeback's `192.168.131.1` IP.
+  The new `--mode perception` loads only YOLO/Grounding DINO and the target manager
+  on Ridgeback; `--mode planner` loads only DINOv3, SigLIP, Qwen3 and OmTrackVLA on
+  Thor. The existing `--mode full` remains the default for local and full-Thor runs.
   This is a deployment option for the local integration; upstream OmTrackVLA is
   unchanged. Loopback remains the default on the x86 host.
+- `hybrid_protocol.py`: validates that local perception and Thor planning responses
+  belong to the same request, camera frame and target identity before the ROS bridge
+  accepts them. The Thor planner validates locked target boxes before inference;
+  invalid-target frames carry metadata only, with no JPEG transfer to Thor.
 - `perf_log.py`, `summarize_perf.py`: opt-in JSONL stage timing and read-only summary
   for dry-run baseline captures. Profiling synchronizes CUDA at stage boundaries and
   the ROS bridge refuses armable mode while it is enabled.
@@ -92,11 +99,16 @@ working:
   `OMTRACKVLA_INFERENCE_HOST` set to Thor, it starts only the local ROS bridge.
 - `start_inference_thor.sh`: runs the project inference process on the attached Thor
   using its separate Arm64 CUDA environment and a single allowed Ridgeback IP.
+  `start_planner_thor.sh` selects planner-only mode and requires only the four
+  planner/vision model weights.
 - `requirements_thor.txt`: direct Python dependency pins for this project's
   JetPack 7.0/Python 3.12 inference environment. It does not apply to other Thor
   projects or to the upstream Habitat training setup.
 - `start_ridgeback_thor.sh`: dry-run by default, connects the host ROS bridge to the
   Thor server at `192.168.131.51` while retaining sensor and motor safety locally.
+- `start_ridgeback_hybrid.sh`: starts Ridgeback loopback perception on RTX port
+  `18766`, connects the same Ridgeback ROS bridge to Thor planner port `18765`, and
+  rejects armable output until live locked-target and physical safety checks pass.
 - `start_ridgeback_rviz.sh`: namespaced RViz launcher.
 - `start_ridgeback_all.sh`: supervised one-terminal armable launcher. It requires the
   operator to type `ENABLE`, runs the deadman in the foreground, and cleans up on
@@ -131,6 +143,10 @@ working:
   waiting for the status timer; its expected rate is the configured 3 Hz target rate.
 - Target reset: `/r100_0160/omtrackvla/reset_target` (`std_msgs/Empty`); clears the
   target identity and restarts the prompt search without restarting the models.
+- Hybrid-only bridge parameters: `perception_host=127.0.0.1` and
+  `perception_port=18766` from its launcher; an empty host in `ridgeback.yaml`
+  selects the existing single inference server. Thor's planner remains a TCP
+  process even though ROS 2 Jazzy is installed on both computers.
 - `target_state` includes `target_debug`: every tracked person (score, box, gallery
   similarity), every Grounding DINO box (label, score, colour fraction), and the
   candidate ranking.
@@ -262,6 +278,18 @@ but at the post-inference controller layer rather than inside upstream OmTrackVL
 
 ## Verified behavior and limitation
 
+- The new two-GPU dry-run loads Ridgeback perception at about `2,390 MiB` RTX GPU
+  memory while Thor runs planner mode. On 90 current-camera blue-basket frames, it
+  matched the prior local RTX replay on all target state/reason/track-ID and
+  trajectory-valid/reason decisions; 49 frames were `LOCKED`. Fast offline replay
+  caused only four wall-clock-capped planner updates and is not a planner-cadence
+  measurement. A 115-frame live no-person dry-run held `3.022 Hz` tracking,
+  `32.237/34.995 ms` median/p95 bridge pipeline time, and
+  `50.000/50.285/50.875 ms` median/p95/max 20 Hz control intervals. One first-frame
+  response exceeded the camera freshness bound during model warm-up and was
+  rejected. Stopping each service in separate dry-runs cleared predictions and
+  produced connection errors; the deadman remained unheld, so this does not verify
+  physical stopping. No live locked-target or physical-motion hybrid test has passed.
 - The active dual-rate design targets 3 Hz target tracking/display and up to 2 Hz
   OmTrackVLA updates after `LOCKED`. The 20 Hz safety loop remains on the ROS/CPU side.
   One clean restarted run published Target Tracker images at about `3.08 Hz`. It used
@@ -320,7 +348,7 @@ but at the post-inference controller layer rather than inside upstream OmTrackVL
 - The bridge is dry-run by default and stops on stale deadman, camera, LiDAR, inference,
   or E-stop data, an active E-stop, missing target lock, invalid target geometry,
   trajectory mismatch, obstacle, invalid values, or disconnection. The complete local
-  unit suite contains 62 tests; it does not replace live safety validation.
+  unit suite contains 66 tests; it does not replace live safety validation.
 - Same-frame prompt comparison produced similar forward commands for a black jacket,
   a white lab coat, a black chair, and an instruction to move away. The released
   OmTrackVLA checkpoint does not identify the prompted person or report target presence.
@@ -341,6 +369,26 @@ physical E-stop reachable. Press Ctrl+C to stop the foreground deadman and shut 
 the launcher processes.
 
 ## Change log
+
+### 2026-09-29 (two-GPU dry-run implementation)
+
+- Added project-specific `perception` and `planner` modes. Ridgeback RTX now can
+  run YOLO and Grounding DINO while Thor runs DINOv3, SigLIP and OmTrackVLA; the
+  existing full-inference launch is retained. The bridge combines same-frame
+  replies and keeps depth, fusion, safety and `/cmd_vel` on Ridgeback.
+- Added dry-run hybrid launchers, target/result checks and failure reset. The
+  local RTX process used about `2,390 MiB` during replay. All 90 blue-basket replay
+  frames matched prior identity and trajectory validity decisions; the 115-frame
+  live no-person run preserved 3 Hz tracking and the 20 Hz control timer. Stopping
+  each service in a separate dry-run cleared predictions; a five-frame full-mode
+  regression still locked target ID 1 on frame 3. Locked live cadence, disconnect
+  recovery, and armable behavior remain unverified.
+- On invalid-target frames the hybrid bridge now sends only state metadata to Thor.
+  A 90-frame replay still matched all target and trajectory decisions and omitted
+  Thor JPEG transfer on 41 frames. A later 46-frame live no-person dry-run held
+  `3.054 Hz` target processing and a `51.455 ms` maximum control interval; its
+  `25.564/27.673 ms` bridge pipeline median/p95 is from a separate recording and
+  does not establish a speedup over the earlier full-JPEG run.
 
 ### 2026-09-28 (live host-placement audit)
 

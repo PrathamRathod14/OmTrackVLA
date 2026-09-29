@@ -10,8 +10,9 @@ ROS subscriptions and the safety-gated velocity output.
 
 ### Where the modules run
 
-Two machines, two Python runtimes, one socket between them. Inference moved to Thor;
-everything that can stop the robot stayed on the Ridgeback computer.
+The diagram below describes the existing full-Thor inference option: two machines,
+two Python runtimes, one socket between them. The newer two-GPU dry-run option is
+documented below. In both, the final motion gate stays on Ridgeback.
 
 ```mermaid
 flowchart LR
@@ -199,6 +200,78 @@ host until the Thor path passes the replay,
 timing, and physical safety gates in `docs/COMPUTE_PLACEMENT_PLAN.md`. The remote
 launcher rejects `OMTRACKVLA_ARM_OUTPUT=1` unless the operator also sets
 `OMTRACKVLA_ALLOW_REMOTE_ARM=1` after those gates pass.
+
+## Two-GPU Ridgeback RTX plus Thor planner dry-run
+
+This project now has an optional **dry-run-only** split that loads YOLO11n and
+Grounding DINO on the Ridgeback RTX 5060. BoT-SORT, optical flow, the HSV appearance
+gallery, and the target state machine run in the same Ridgeback perception process
+on its CPU. Thor loads DINOv3, SigLIP, Qwen3 and OmTrackVLA for waypoint planning;
+it does not load YOLO or Grounding DINO in planner mode. Ridgeback retains camera,
+depth, LiDAR, E-stop, deadman, depth localization, 75/25 command fusion, the 20 Hz
+safety gate, and the only `/cmd_vel` publisher.
+
+`inference_server.py` supports `full` (the prior default), `perception`, and
+`planner` modes. The Ridgeback bridge sends the selected compressed frame to its
+loopback perception server at `127.0.0.1:18766`. For a `LOCKED` target it sends
+that same frame and verified target result to Thor at `192.168.131.51:18765`;
+while searching or lost it sends only target metadata so Thor can clear its planner
+history without receiving an unused JPEG. It checks request ID,
+frame ID, service mode and target identity before accepting the combined response.
+A stale response or either service's failure clears the prediction and requires
+target reacquisition. Thor's inference process still uses the project TCP protocol;
+ROS 2 Jazzy being installed on both computers does not turn it into a ROS node.
+
+Stop an existing Thor inference server on port `18765`, then start planner mode on
+Thor:
+
+```bash
+ssh robot@192.168.131.51
+cd /home/robot/dev/omtrackvla
+./real_robot/start_planner_thor.sh
+```
+
+In a second terminal on Ridgeback, with no other OmTrackVLA controller running:
+
+```bash
+cd /home/robot/Desktop/omtrackvla
+ROBOT_NAMESPACE=r100_0160 \
+CAMERA_TOPIC=camera/color/image_raw/compressed \
+CAMERA_COMPRESSED=true \
+./real_robot/start_ridgeback_hybrid.sh
+```
+
+The Ridgeback launcher starts the local perception server, waits for both service
+modes, and starts the existing ROS bridge. RViz is optional in a third Ridgeback
+terminal with `./real_robot/start_ridgeback_rviz.sh`. The hybrid launcher rejects
+`OMTRACKVLA_ARM_OUTPUT=1`; it has not passed a live locked-target or physical safety
+trial. The supervised `start_ridgeback_all.sh` remains the local RTX armable mode.
+
+A 90-frame current-camera replay with the blue-basket holder matched the prior
+local RTX result on target state, reason, track ID, trajectory validity, and
+trajectory reason on every frame: 49 frames were `LOCKED`. That replay was run as
+fast as the services responded and produced only four planner updates, so it is
+not a live planner-rate measurement. The local perception process occupied about
+`2,390 MiB` of RTX GPU memory in the replay snapshot. A second replay after
+metadata-only requests were added matched the same five target and trajectory
+fields on all 90 frames and omitted the Thor JPEG on 41 invalid-target frames.
+An earlier live, no-person
+dry-run recorded 115 `SEARCHING` frames at `3.022 Hz`, bridge pipeline median/p95
+`32.237/34.995 ms`, and 20 Hz control interval median/p95/max
+`50.000/50.285/50.875 ms` over 774 intervals. One first-frame perception response
+was rejected as stale during GPU warm-up. All 775 gate decisions stayed in dry-run
+with no deadman; no locked-target planner cadence or physical motion was tested.
+These timings cannot establish a speedup without a matched full-pipeline comparison.
+After the metadata-only change, another no-person live dry-run recorded 46
+`SEARCHING` frames at `3.054 Hz`, bridge pipeline median/p95
+`25.564/27.673 ms`, and control interval median/p95/max
+`49.999/50.243/51.455 ms` over 315 intervals. One response was rejected as
+stale; no live planner update occurred. These two runs used different moments,
+so their timing difference is not an end-to-end speedup claim.
+In separate dry-runs, terminating Ridgeback perception and terminating Thor planning
+each caused peer-closed/connection-refused errors and cleared the bridge prediction;
+all logged control outputs remained blocked. The deadman was unheld in those runs,
+so these checks do not establish a physical stop distance or recovery behavior.
 
 ## Safety behavior
 

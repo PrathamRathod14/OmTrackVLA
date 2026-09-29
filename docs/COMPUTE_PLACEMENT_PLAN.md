@@ -1,6 +1,6 @@
 # OmTrackVLA Ridgeback Compute Placement Plan
 
-Last updated: 2026-09-28
+Last updated: 2026-09-29
 
 This document records where each part of the live Ridgeback pipeline executes, which
 placement changes have been measured, and what should be tested next. Update it with
@@ -8,8 +8,9 @@ every CPU/GPU placement, rate, or pipeline-scheduling discussion and implementat
 
 ## Goal and constraints
 
-Use the RTX 5060 in the active local run, or Thor CUDA in the inference split, for
-work that benefits from wide parallel execution. Keep the Ridgeback computer's 20 Hz
+Use the RTX 5060 in the active local run, Thor CUDA in the full-Thor inference
+split, or both GPUs in the new hybrid dry-run for work that benefits from wide
+parallel execution. Keep the Ridgeback computer's 20 Hz
 motion gate independent, predictable, and able to stop the robot when inference is
 late or unavailable.
 
@@ -78,8 +79,10 @@ and [NVIDIA Jetson Thor](https://developer.nvidia.com/blog/introducing-nvidia-je
 ## Current placement
 
 The CPU/CUDA entries below describe stages of the active local RTX run. In the
-implemented Thor split, the inference-server stages move together to Thor as shown in
-the host-placement table below; the ROS bridge stages remain on Ridgeback.
+full-Thor split, the inference-server stages move together to Thor as shown in
+the host-placement table below. In the new hybrid dry-run, perception returns to
+Ridgeback's RTX/CPU while the vision/waypoint planner remains on Thor; the ROS
+bridge and final safety gate remain on Ridgeback in every mode.
 
 | Pipeline stage | Current execution | Evidence and decision |
 | --- | --- | --- |
@@ -389,15 +392,15 @@ driver and ROS interfaces remain on the existing computer.
 The project checkout at `/home/robot/dev/omtrackvla` on Thor contains this project's
 inference server and model code, six model weight sets (`models/`, about 6.6 GB),
 and a separate Arm64 Python 3.12 environment with CUDA PyTorch. Copying the code
-and weights did not move the robot's sensor or motor interfaces. In the selected
-split, the process placement is:
+and weights did not move the robot's sensor or motor interfaces. In the older
+full-Thor split, the process placement is:
 
 | Machine and processor | Project work |
 | --- | --- |
 | Thor GPU, through CUDA | YOLO11n person model; Grounding DINO model; DINOv3 and SigLIP encoders and their shared CUDA image preprocessing; OmTrackVLA/Qwen3 visual projection and waypoint planner; token pooling and retained feature tensors. |
 | Thor CPU | Inference socket and JSON/JPEG handling; BoT-SORT association, optical flow, HSV clothing features and colour checks; grounding-box postprocessing, target identity state machine, diagnostic image drawing and JPEG encoding. |
 | Ridgeback computer CPU | ROS 2 subscriptions for camera, depth, LiDAR, E-stop and deadman; camera frame selection; depth localization; 75/25 leader/model command fusion; freshness, obstacle, speed and 20 Hz motor safety checks; `/cmd_vel`, status/path/image ROS publication and RViz. |
-| Ridgeback RTX 5060 | No project neural inference when the bridge is connected to Thor. RViz may still use GPU graphics rendering, and unrelated system processes may use the GPU. The local RTX inference path remains available as a separate launch mode. |
+| Ridgeback RTX 5060 | No project neural inference in full-Thor mode. In the new hybrid dry-run it runs YOLO and Grounding DINO; RViz may also use GPU graphics rendering. The full local RTX inference path remains available. |
 
 ### Placement choices if ROS 2 runs on both computers
 
@@ -405,8 +408,8 @@ Thor has `/opt/ros/jazzy` installed, but this project's Thor inference service i
 currently a TCP socket process, **not a ROS node**. Installing/running ROS on both
 computers does not by itself split `inference_server.py` or change the current
 Ridgeback-to-Thor protocol. This table lists actual runtime modules and distinct
-stages; "either" means a proposed placement after adding and validating the needed
-inter-machine interface, not a launcher option available today.
+stages. The current hybrid mode uses TCP, while moving these stages as independent
+ROS nodes remains a separate proposal.
 
 | Module or stage | Current Thor split | Placement choice with ROS on both | Practical boundary |
 | --- | --- | --- | --- |
@@ -423,28 +426,24 @@ inter-machine interface, not a launcher option available today.
 | Target/status/path ROS publication and RViz display | Ridgeback | Either host can display/subscribe; publication can be moved with a new node | Keep one authoritative publisher per result; measure annotated-image traffic if sending it twice. |
 | `protocol.py` and `perf_log.py` | Both hosts | Follow their client/server or instrumented process | Support modules, not compute-heavy candidates. `gpu_ops.py` is benchmarked but not on the live path. |
 
-The simplest *proposed* two-GPU boundary is perception (YOLO, Grounding DINO,
-tracking/identity) on Ridgeback's RTX/CPU and the vision encoders plus waypoint
-model on Thor's GPU. This requires splitting the current monolithic
-`OmTrackInference` server into separately addressable processes or ROS nodes and
-carrying frame ID/time, prompt/reset generation, target state/bbox, image and
-waypoint provenance across the boundary. ROS topics, services or actions could
-carry that data, but cross-host discovery, matching QoS, clock/freshness handling,
-and single ownership of `/cmd_vel` must be tested. In particular, two ROS installs
-do not make the current Python model stages independently movable.
+The perception-on-RTX/planner-on-Thor boundary is now implemented as an optional
+dry-run using two `inference_server.py` processes and the existing project TCP
+protocol. Ridgeback passes the selected JPEG through local perception, then sends
+it to Thor only when a target is `LOCKED`; invalid-target frames carry small state
+metadata so Thor clears planner history without receiving an unused JPEG. Its bridge checks both service
+modes, request and frame IDs, and target identity before fusion. ROS topics do not
+carry model requests in this implementation; moving the model boundary to ROS
+would need new nodes, discovery/QoS tests, and freshness validation. The physical
+drivers and final Ridgeback safety gate remain local. See the measured hybrid
+result below before inferring any speed benefit.
 
-Current decision: keep the existing Thor single-server dry-run and the local RTX
-armable mode until matched full-pipeline measurements identify a reason to implement
-this new boundary. The hardware-bound drivers and final Ridgeback safety gate remain
-on Ridgeback in either design.
-
-`protocol.py` is used on both computers. The Ridgeback bridge sends a selected
+In full-Thor mode, `protocol.py` is used on both computers. The Ridgeback bridge sends a selected
 compressed RGB frame and prompt to Thor; Thor returns target state, annotated image,
 raw waypoints and provenance. Ridgeback combines that result with its local depth
 and safety data. An all-on-Thor ROS/motor deployment is not implemented.
 
-The Thor CPU/GPU split is **within one `inference_server.py` Python process**, not
-two services or a hardware partition. The CPU receives JSON, decodes JPEG with
+In full-Thor mode, the Thor CPU/GPU split is **within one `inference_server.py`
+Python process**, not a hardware partition. The CPU receives JSON, decodes JPEG with
 OpenCV, and runs the tracking/identity logic. PyTorch models are placed on `cuda`
 (`.to(self.device)` or Ultralytics `device=self.device`), so their tensor operations
 execute on Thor's GPU. Detector boxes return through `.cpu().numpy()` for BoT-SORT
@@ -452,8 +451,9 @@ and HSV checks. For a locked target, `torch.from_numpy` starts with a CPU RGB fr
 `resize_rgb_tensor_for_vision` explicitly uploads it with `.to(device)`, then CUDA
 does shared resize, vision encoding, token pooling and waypoint planning. The small
 trajectory returns through `.detach().float().cpu()` for JSON serialization. There
-is no custom CPU/GPU scheduler, dedicated CPU core assignment, zero-copy path, or
-separate CPU/GPU worker service. The Thor launcher caps OpenMP/MKL threads at four;
+is no custom CPU/GPU scheduler, dedicated CPU core assignment, or zero-copy path.
+Hybrid mode uses separate Ridgeback perception and Thor planner processes, still
+without a custom CPU/GPU scheduler. The Thor launcher caps OpenMP/MKL threads at four;
 the source code and framework decide the individual tensor placements.
 
 ### How this repository would run on Thor
@@ -541,9 +541,9 @@ the physical E-stop active, so every control decision remained blocked and no
 physical motion was tested. The observed planner rate and isolated stale response
 need investigation before considering remote arming.
 
-### Would using the Ridgeback RTX alongside Thor help?
+### Ridgeback RTX plus Thor hybrid experiment
 
-Current Thor split: the Ridgeback RTX does no project neural inference. Thor's GPU
+In the older full-Thor split, the Ridgeback RTX does no project neural inference. Thor's GPU
 runs the detector, vision encoders, and planner; its CPU runs tracking and image
 handling. This is a placement choice, not evidence that Thor has unlimited capacity.
 In the live blue-basket dry-run, the 31 frames that actually updated the planner had
@@ -554,23 +554,58 @@ rate, and this log alone cannot attribute the gap to Thor GPU load: target state
 request scheduling, CPU work, and transport also affect cadence. There is no
 matched live local-RTX-versus-Thor baseline or GPU-utilization/thermal trace yet.
 
-A possible **unimplemented** two-GPU variant would run YOLO/Grounding DINO person
-perception on the Ridgeback RTX and DINOv3/SigLIP/OmTrackVLA waypoint planning on
-Thor. Ridgeback would have to send the selected image and target identity/state to
-Thor, and coordinate two inference services and their frame timestamps. Since the
-planner depends on the verified target, splitting one frame across GPUs adds a
-network handoff and does not automatically shorten its latency; throughput could
-improve only if stages for different frames can overlap without delaying target
-freshness or the 20 Hz safety gate. Keeping both services synchronized and handling
-one side's failure would add operational and safety complexity.
+The new hybrid mode runs YOLO and Grounding DINO on the Ridgeback RTX, with BoT-SORT,
+optical flow and appearance/identity on its CPU. Thor loads DINOv3, SigLIP, Qwen3
+and OmTrackVLA on its GPU, with JPEG/network and planner-cache work on its CPU.
+The Ridgeback ROS bridge still owns depth/fusion, E-stop/deadman/LiDAR checks,
+the 20 Hz safety timer and `/cmd_vel`. Ridgeback sends the selected JPEG locally
+and forwards it to Thor only for a locked target; each frame still gets a matching
+target-state response from Thor before acceptance.
+One-frame latency can rise due to the extra handoff; these stages do not overlap
+in the current implementation.
 
-Decision for now: keep the tested single-server Thor split as the experimental
-remote mode, and retain the local RTX path as the armable mode. Before implementing
-the two-GPU variant, capture matched live RTX and Thor runs with the same scene,
-prompt, rate settings, and full stage profiling; record both GPU utilization, memory,
-power/thermal throttling, transport time, planner cadence, p95 latency, and stale
-responses. If a measurable Thor stage or resource bottleneck remains, prototype the
-two-GPU placement in dry-run and compare full-pipeline latency and control timing.
+The 90-frame blue-basket offline replay matched the prior full RTX run on target
+state, reason, track ID, trajectory-valid decision and trajectory reason on every
+frame; 49 frames were `LOCKED`. The Ridgeback perception process held about
+`2,390 MiB` of RTX memory. The unpaced replay produced four planner updates under
+the wall-clock 2 Hz cap. Its `37.105 ms` median round trip is an **offline replay
+number**, dominated by cached-planner frames, and is not a live locked-target or
+speedup measurement. Four update samples cannot establish planner cadence.
+After omitting JPEGs on invalid-target frames, a second 90-frame replay still
+matched those five decision fields on all frames; 41 invalid-target frames sent
+metadata only to Thor.
+
+The first live hybrid ROS dry-run viewed no person: 115 `SEARCHING` frames at
+`3.022 Hz`; bridge inference median/p95 `27.737/29.587 ms`; bridge pipeline
+median/p95 `32.237/34.995 ms`; and the Ridgeback control interval
+median/p95/max `50.000/50.285/50.875 ms` across 774 intervals. One initial frame
+was rejected when local perception warm-up exceeded the `0.75 s` camera age limit.
+All 775 logged control ticks were dry-run with the deadman unheld. No live planner
+update, network-failure recovery or physical motor behavior was exercised in this
+hybrid trial. The full-Thor and hybrid SEARCHING recordings used different moments;
+their raw latency numbers are not a matched speed comparison.
+
+In subsequent dry-runs, stopping local Ridgeback perception and stopping Thor
+planning separately produced peer-closed/connection-refused errors; the bridge
+cleared predictions in both cases and all logged control outputs remained blocked.
+The deadman was unheld, so those trials do not measure an armable stop or recovery.
+Five current-camera frames through the retained full RTX mode still locked target
+ID 1 on frame 3 with three trajectory-valid frames.
+
+The optimized metadata-only path had a separate 46-frame live no-person dry-run at
+`3.054 Hz` tracking, `25.564/27.673 ms` median/p95 bridge pipeline time, and
+`49.999/50.243/51.455 ms` median/p95/max control intervals over 315 intervals.
+One response was rejected as stale at startup; no live planner update occurred.
+This and the earlier 115-frame run were taken at different moments, so the lower
+SEARCHING latency is not a measured end-to-end speedup or a locked-target result.
+
+Decision: retain the local RTX supervised launcher as the only armable path. The
+hybrid launcher explicitly rejects armable mode. Next capture matched full RTX,
+full Thor and hybrid live locked-target runs with the same scene and settings;
+record stage p50/p95/max, both GPU utilization/memory, CPU/network load, planner
+cadence, stale replies and 20 Hz control timing. Then test both service disconnects,
+reconnect and physical safety before considering any hybrid arming. Do not call the
+hybrid faster or more efficient until those full-pipeline comparisons exist.
 
 The first live split dry-run on 2026-09-28 captured 117 no-person `SEARCHING`
 frames over approximately 39 seconds: target-view cadence `3.007 Hz`, reported
@@ -662,6 +697,30 @@ Platform sources: [NVIDIA Thor specifications](https://www.nvidia.com/en-us/auto
 and [ROS 2 Jazzy supported platforms](https://www.openrobotics.org/blog/2024/5/ros-jazzy-jalisco-released).
 
 ## Decision log
+
+### 2026-09-29
+
+- Implemented the project-specific hybrid dry-run: Ridgeback RTX/CPU owns YOLO,
+  Grounding DINO and stateful target identity; Thor GPU/CPU owns the vision and
+  OmTrackVLA waypoint planner. The local ROS bridge checks same-frame target
+  provenance and retains depth/fusion and the only motor safety gate. No other
+  Thor project or ROS driver was changed.
+- Replayed 90 current-camera blue-basket frames through both services: all target
+  and trajectory-valid decisions matched the prior full RTX replay; 49 frames
+  locked. The Ridgeback perception process occupied about 2.39 GiB RTX VRAM.
+  The unpaced replay had only four planner updates, so it cannot establish rate.
+- Sent metadata rather than an unused JPEG to Thor on invalid-target hybrid frames.
+  The repeated 90-frame replay matched all five target/trajectory fields and sent
+  no Thor JPEG on 41 frames. A subsequent 46-frame no-person live dry-run held
+  3.054 Hz tracking and a 51.455 ms maximum control interval; no planner update
+  was exercised and the separate-session timings cannot establish a speedup.
+- Captured 115 no-person live hybrid dry-run frames at 3.022 Hz with 32.237/34.995 ms
+  median/p95 bridge pipeline time and 50.875 ms maximum 20 Hz control interval.
+  One warm-up frame was rejected as stale. This trial did not exercise live planner
+  output or robot motion. Both service-stop dry-runs cleared predictions and held
+  zero output with the deadman unheld; the retained full RTX mode locked on five
+  current-camera regression frames. Keep hybrid dry-run until matched locked-target,
+  recovery, and physical safety gates pass.
 
 ### 2026-09-28
 
