@@ -564,6 +564,24 @@ target-state response from Thor before acceptance.
 One-frame latency can rise due to the extra handoff; these stages do not overlap
 in the current implementation.
 
+Placement rationale: local detection and identity can use the otherwise idle RTX
+without sending every searching frame across the network. Thor keeps the larger
+DINOv3/SigLIP/Qwen/OmTrackVLA stack and its 31-frame planner history in its shared
+memory pool. Ridgeback keeps the depth-localized leader direction, 75% target / 25%
+aligned planner command fusion, and the final motion gate beside the robot's sensors
+and base. This split is a capacity and safety hypothesis, not a demonstrated speedup:
+the perception reply must arrive before the planner request is sent. Keep tracking,
+small geometry calculations, ROS I/O, and the safety timer on their host CPUs unless
+matched profiling shows a clear gain from changing them.
+
+Most useful next work: capture a live `LOCKED` hybrid dry-run with a visible
+blue-basket leader, and compare it with full RTX and full Thor under the same scene.
+Record target identity, planner-update cadence, stage p50/p95/max, GPU load/memory on
+both devices, network load, stale frames, and 20 Hz control deadlines. If Thor's
+planner or the sequential handoff dominates, optimize that measured bottleneck
+before moving another module. Validate reconnect and physical safety before any
+hybrid motor-output change.
+
 The 90-frame blue-basket offline replay matched the prior full RTX run on target
 state, reason, track ID, trajectory-valid decision and trajectory reason on every
 frame; 49 frames were `LOCKED`. The Ridgeback perception process held about
@@ -700,6 +718,9 @@ and [ROS 2 Jazzy supported platforms](https://www.openrobotics.org/blog/2024/5/r
 
 ### 2026-09-29
 
+- Reviewed the hybrid placement rationale and prioritized a matched live locked-target
+  comparison before further migration. Current live hybrid evidence covers searching
+  only; the 75/25 command fusion and final safety gate remain on Ridgeback CPU.
 - Implemented the project-specific hybrid dry-run: Ridgeback RTX/CPU owns YOLO,
   Grounding DINO and stateful target identity; Thor GPU/CPU owns the vision and
   OmTrackVLA waypoint planner. The local ROS bridge checks same-frame target
