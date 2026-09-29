@@ -370,6 +370,42 @@ the launcher processes.
 
 ## Change log
 
+### 2026-09-29 (supervised local motion observation)
+
+- After the ROS argument fix, an operator ran the local RTX supervised launcher. A
+  39.5-second read-only observation saw the controller, deadman, inference server,
+  RViz and supervised scanners active. Wheel odometry showed 1.26 m endpoint motion.
+  The prompted blue-basket holder was visibly boxed in one sampled Target Tracker
+  image; 78/80 status samples were `LOCKED` on track ID 10.
+- Two status samples became `UNCERTAIN` and stopped for `target_not_locked`; 21
+  consecutive samples then stopped for `scan_stale` for about 10 seconds, despite
+  target lock and connected inference. The merged-scan dropout cause is undetermined.
+  No motion or identity accuracy percentage can be inferred from this short window.
+  See `docs/RUN_REPORT_2026-09-29.md` for the timed evidence and limits.
+
+### 2026-09-29 (local supervised launcher ROS argument fix)
+
+- A supervised local launch loaded the full model and reported `ARMABLE`, but the
+  Ridgeback ROS node exited before startup because ROS 2 rejected the empty
+  `-p perception_host:=` override. `start_ridgeback.sh` now omits that override in
+  local mode and uses the YAML default empty value. Hybrid mode still passes its
+  nonempty perception host. No safety gate, motion limit, or arming condition changed.
+  This fixes argument parsing; a subsequent full supervised launch is still needed
+  to verify scanner recovery, RViz, and motion readiness.
+
+### 2026-09-29 (deployment document diagrams)
+
+- Updated the deployment guide to show all three implemented execution modes and
+  the actual two-GPU hybrid request sequence. The diagrams distinguish Ridgeback
+  RTX detection from Ridgeback CPU tracking, Thor GPU planning, and the independent
+  Ridgeback CPU motion gate. The full-Thor diagram remains labelled as its separate
+  deployment option. No runtime behavior or safety setting changed with this
+  documentation update.
+- Created the September 29 technical review PDF from a versioned ReportLab builder.
+  It records the hybrid placement, sequential frame flow, identity and fusion rules,
+  measured results, and dry-run limits. The September 28 editable presentation
+  remains a historical snapshot.
+
 ### 2026-09-29 (two-GPU dry-run implementation)
 
 - Added project-specific `perception` and `planner` modes. Ridgeback RTX now can

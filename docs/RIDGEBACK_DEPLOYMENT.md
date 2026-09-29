@@ -8,11 +8,74 @@ ROS subscriptions and the safety-gated velocity output.
 
 ## System architecture
 
-### Where the modules run
+### Available execution modes
+
+| Mode | Ridgeback RTX 5060 | Thor GPU | Motion status |
+| --- | --- | --- | --- |
+| Local full inference | YOLO, Grounding DINO, DINOv3, SigLIP, Qwen3, OmTrackVLA | unused by this project | supervised armable launcher retained |
+| Full-Thor inference | unused by this project | all six models | dry-run verified; remote arming requires separate gates |
+| Two-GPU hybrid | YOLO and Grounding DINO | DINOv3, SigLIP, Qwen3, OmTrackVLA | dry-run only; launcher rejects arming |
+
+In all three modes, Ridgeback owns ROS sensor inputs, depth localization, command
+fusion, the 20 Hz motion gate, and `/cmd_vel`. CUDA runs neural models on the GPU of
+the selected host. BoT-SORT association, optical flow, and the HSV clothing gallery
+run on the CPU beside YOLO. The table describes deployment options, not processes
+that run simultaneously.
+
+### Two-GPU hybrid: where the modules run
+
+```mermaid
+flowchart LR
+  subgraph RB["Ridgeback computer - 192.168.131.1"]
+    ROS["ROS 2 bridge<br/>frame selection + depth"]
+    P["Perception service"]
+    P --> RG["RTX 5060 GPU<br/>YOLO11n; Grounding DINO when due"]
+    RG --> RC["CPU<br/>BoT-SORT + optical flow + HSV gallery<br/>target identity"]
+    F["CPU<br/>depth position + command fusion"] --> SAFE["CPU<br/>20 Hz safety gate"]
+  end
+  CAM["RealSense RGB + depth"] --> ROS
+  LID["LiDAR, E-stop, deadman"] --> SAFE
+  ROS -- "selected JPEG<br/>loopback :18766" --> P
+  RC -- "target result" --> ROS
+  subgraph TH["NVIDIA Thor - 192.168.131.51"]
+    T["Planner service"] --> TG["Thor GPU<br/>DINOv3 + SigLIP + Qwen3<br/>OmTrackVLA waypoints"]
+  end
+  ROS -- "LOCKED: same JPEG + target<br/>otherwise: target metadata only<br/>TCP :18765" --> T
+  TG -- "path + matching target state" --> ROS
+  ROS --> F
+  SAFE --> CMD["/cmd_vel or zero"]
+```
+
+The Ridgeback bridge waits for perception before requesting a Thor planner response;
+the two inference stages do not overlap in the current implementation. It checks
+the request ID, frame ID, target identity, and planner state before using the reply.
+The Thor service is a TCP process even though ROS 2 is installed on both computers.
+
+### Two-GPU hybrid: one selected frame
+
+```mermaid
+flowchart TD
+  A["Ridgeback selects compressed RGB frame<br/>target loop up to 3 Hz"] --> B["Ridgeback RTX detects people; grounds when due<br/>Ridgeback CPU tracks and verifies identity"]
+  B --> C{"Target LOCKED?"}
+  C -- no --> D["Send state metadata to Thor<br/>no camera JPEG"]
+  C -- yes --> E["Send same JPEG + verified target to Thor"]
+  D --> F["Thor handles target loss<br/>no waypoint inference"]
+  E --> G["Thor computes or reuses waypoints<br/>planner cap 2 Hz"]
+  F --> H["Ridgeback checks reply and freshness"]
+  G --> H
+  H --> I["Depth-localized leader direction<br/>75% target + 25% aligned planner direction"]
+  I --> J["20 Hz Ridgeback safety gate<br/>dry-run forces zero"]
+```
+
+The 75/25 setting is a command-direction blend when the model direction agrees with
+the leader direction. It is not a CPU/GPU work split. A contrary model direction is
+replaced by the leader direction. The hybrid mode has not passed a live locked-target
+planner-rate or physical-motion trial.
+
+### Full-Thor option: where the modules run
 
 The diagram below describes the existing full-Thor inference option: two machines,
-two Python runtimes, one socket between them. The newer two-GPU dry-run option is
-documented below. In both, the final motion gate stays on Ridgeback.
+two Python runtimes, one socket between them. The final motion gate stays on Ridgeback.
 
 ```mermaid
 flowchart LR
@@ -44,7 +107,7 @@ The socket carries length-prefixed JSON. The Thor server binds only to its
 robot-network address and accepts exactly one client IP; it is neither authenticated
 nor encrypted, so port `18765` must stay on the dedicated robot network.
 
-### One frame's journey
+### One frame's journey in full-Thor mode
 
 ```mermaid
 flowchart TD
@@ -72,7 +135,7 @@ Three independent clocks: detection at 3 Hz, the planner at 2 Hz, and the safety
 at 20 Hz. The gate **samples** the model rather than being called by it, so a hung or
 disconnected planner cannot hold the robot in motion.
 
-### Module map
+### Full-Thor module map
 
 | Module | Runs on | Role | Can stop the robot |
 | --- | --- | --- | --- |

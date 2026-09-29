@@ -563,6 +563,24 @@ need investigation before considering remote arming.
 
 ### Ridgeback RTX plus Thor hybrid experiment
 
+The diagram separates placement from timing. The target loop sends one selected
+frame through perception and then planning in sequence; the Ridgeback safety timer
+runs independently every 50 ms.
+
+```mermaid
+flowchart LR
+  A["Selected RGB frame<br/>Ridgeback CPU"] --> B["YOLO; Grounding DINO when due<br/>Ridgeback RTX"]
+  B --> C["BoT-SORT + HSV identity<br/>Ridgeback CPU"]
+  C --> D{"LOCKED?"}
+  D -- yes --> E["JPEG + target<br/>robot network"]
+  D -- no --> F["target metadata only"]
+  E --> G["DINOv3 + SigLIP + Qwen3 + OmTrackVLA<br/>Thor GPU when planner due"]
+  F --> H["No planner inference"]
+  G --> I["Depth + command fusion<br/>Ridgeback CPU"]
+  H --> I
+  I --> J["20 Hz safety gate<br/>Ridgeback CPU"]
+```
+
 In the older full-Thor split, the Ridgeback RTX does no project neural inference. Thor's GPU
 runs the detector, vision encoders, and planner; its CPU runs tracking and image
 handling. This is a placement choice, not evidence that Thor has unlimited capacity.
@@ -738,6 +756,18 @@ and [ROS 2 Jazzy supported platforms](https://www.openrobotics.org/blog/2024/5/r
 
 ### 2026-09-29
 
+- A 39.5-second local RTX armable observation after the ROS argument fix recorded
+  80 status samples. Status-sampled inference median/p95 was 35/214 ms and bridge
+  pipeline median/p95 was 53/231 ms. The 2 Hz status topic can miss or repeat 3 Hz
+  inference frames, so these are diagnostic samples, not a full-pipeline comparison.
+  Twenty-one consecutive status samples reported `scan_stale` for about 10 seconds
+  while inference remained connected. The next action is a timestamped front/rear/
+  merged-scan and control-gate capture to distinguish driver, merge, ROS delivery,
+  and host scheduling causes; no placement or rate decision changes yet. See
+  `docs/RUN_REPORT_2026-09-29.md`.
+- Added a hybrid placement and scheduling diagram: Ridgeback RTX perception precedes
+  Thor GPU planning, while the 20 Hz Ridgeback CPU safety timer is independent.
+  This diagram does not claim concurrent inference or a measured speedup.
 - Clarified why the HSV feature exists: it supports same-person tracking and
   reacquisition after the prompt identifies the leader. Its CPU/GPU benchmark
   selects an implementation for that feature; it does not establish whole-tracker
