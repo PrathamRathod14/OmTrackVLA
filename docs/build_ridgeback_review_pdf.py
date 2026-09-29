@@ -119,7 +119,7 @@ def title_page(c):
           "DINOv3 + SigLIP + Qwen3 + OmTrackVLA on Thor CUDA. Its CPU handles the service and cache.",
           TEAL, colors.HexColor("#E8F6F3"), 12.5, 10.5)
     panel(c, 642, 261, 260, 124, "CURRENT STATUS",
-          "Hybrid mode is implemented and dry-run only. Live locked-target cadence and physical motion remain unverified.",
+          "Local RTX armable trials were observed. The two-GPU hybrid remains dry-run only; its live locked-target motion is unverified.",
           AMBER, colors.HexColor("#FFF4E7"), 12.5, 10.5)
     paragraph(c, "Project-specific integration; upstream OmTrackVLA remains the waypoint model.",
               56, 57, 840, 10, colors.HexColor("#B9C9DC"))
@@ -161,7 +161,7 @@ def sequence_page(c):
         panel(c, 48, y, 865, 61, label, desc, BLUE if index < 3 else TEAL,
               WHITE if index % 2 else PALE, 11.5, 10.4)
         y -= 68
-    paragraph(c, "Prompt example: \"Follow the person who is holding blue basket.\" Grounding checks the basket; the HSV signature describes the person's visible clothing. Recovery checks both prompt and appearance.",
+    paragraph(c, "Current prompt: \"Follow the person who is wearing black T-shirt.\" Grounding checks the garment; the HSV signature describes visible clothing. Recovery checks both prompt and appearance.",
               61, 73, 833, 10, MUTED)
     c.showPage()
 
@@ -206,16 +206,42 @@ def evidence_page(c):
     c.showPage()
 
 
+def fusion_trials_page(c):
+    page(c, 6, "Local RTX fusion trials", "Four supervised runs, four different conditions",
+         "Each window lasted 39.5 s; target and gate counts are from 80 status samples at 2 Hz.")
+    trials = [
+        ("A | 25% model / 75% target",
+         "Blue-basket prompt. LOCKED 78/80; gate ready 54/80. Wheel-odometry endpoint change 1.26 m. A stale LiDAR scan blocked commands in 21/80 samples."),
+        ("B | 75% model / 25% target",
+         "Black T-shirt prompt. LOCKED 4/80; target-not-locked gate 76/80. Endpoint change 0.109 m. Appearance recovery repeatedly lost identity, so the blend rarely reached motion."),
+        ("C | 100% model / 0% target",
+         "Black T-shirt prompt. LOCKED 68/80; gate ready 64/80. Endpoint change 2.17 m. The aligned model direction applied in 26 outside-follow-distance samples."),
+        ("D | 0% model / 100% target",
+         "Black T-shirt prompt. LOCKED 80/80; obstacle gate 26/80. Endpoint change 4.26 m, but 0.63 m occurred during a 9.45 s controller-command gap; joystick use is possible. A fresh planner result and model speed cap still applied."),
+    ]
+    top = 414
+    for i, (label, value) in enumerate(trials):
+        row(c, top, label, value, yheight=66, label_width=251,
+            alternate=i % 2 == 0, label_size=10.0, value_size=10.1)
+        top -= 66
+    paragraph(c, "These percentages blend direction only for aligned proposals. Target lock, LiDAR and the 0.9 m follow distance still gate motion.",
+              58, 140, 844, 10.1, NAVY, True)
+    paragraph(c, "Prompts, lock duration, starting pose and scene differed. Odometry is not surveyed travel. Run D's movement cannot be attributed to this controller without the command-mux inputs and output. The runs do not rank the weights or measure target-selection accuracy.",
+              58, 111, 844, 9.8, AMBER)
+    source(c, "Trial details and limits: docs/RUN_REPORT_2026-09-29_OMTRACK75.md")
+    c.showPage()
+
+
 def next_page(c):
-    page(c, 6, "Operator status and next checks", "Hybrid remains a dry-run launch")
+    page(c, 7, "Operator status and next checks", "Hybrid remains a dry-run launch")
     row(c, 425, "Thor terminal", "ssh robot@192.168.131.51; cd /home/robot/dev/omtrackvla; ./real_robot/start_planner_thor.sh", 56, 192, alternate=True, value_size=10.1)
     row(c, 369, "Ridgeback terminal", "cd /home/robot/Desktop/omtrackvla; set ROBOT_NAMESPACE=r100_0160, CAMERA_TOPIC=camera/color/image_raw/compressed, CAMERA_COMPRESSED=true; run ./real_robot/start_ridgeback_hybrid.sh", 79, 192, value_size=9.8)
     row(c, 290, "RViz", "On Ridgeback: ./real_robot/start_ridgeback_rviz.sh in a separate terminal.", 48, 192, alternate=True)
     paragraph(c, "Validation before hybrid motor output", 49, 225, 840, 16, NAVY, True)
     checks = [
-        "Capture a live blue-basket LOCKED dry-run and measure Thor planner updates, target IDs, and stale frames.",
+        "Capture a live black T-shirt LOCKED hybrid dry-run and measure Thor planner updates, target IDs, and stale frames.",
         "Compare full RTX, full Thor, and hybrid with the same scene; record p50/p95/max stage times, GPU load/memory, CPU/network load, and 20 Hz deadlines.",
-        "Test disconnect/reconnect with the deadman held under a controlled physical safety procedure before any arming change.",
+        "Record all twist_mux inputs and output, motor feedback, odometry and gate decisions in the next local RTX armable trial; test hybrid disconnect/reconnect before any arming change.",
     ]
     y = 192
     for item in checks:
@@ -235,7 +261,7 @@ def main():
     doc.setTitle("OmTrackVLA Ridgeback technical review - 29 September 2026")
     doc.setAuthor("OmTrackVLA Ridgeback project")
     for builder in (title_page, architecture_page, sequence_page, safety_page,
-                    evidence_page, next_page):
+                    evidence_page, fusion_trials_page, next_page):
         builder(doc)
     doc.save()
     print(path)

@@ -756,6 +756,11 @@ and [ROS 2 Jazzy supported platforms](https://www.openrobotics.org/blog/2024/5/r
 
 ### 2026-09-29
 
+- Updated the dated technical review PDF to show the four local RTX fusion trials
+  separately from the two-GPU hybrid results. The trial status samples and odometry
+  do not provide a matched end-to-end compute comparison; the hybrid still needs a
+  live locked-target cadence and full-pipeline measurement. No placement or rate
+  decision changed.
 - Reviewed four 39.5-second local RTX fusion trials at 2 Hz status cadence.
   Status-sampled inference median/p95 was 35.5/214, 257/318, 36.1/262, and
   34.2/69.0 ms; bridge pipeline median/p95 was 52.9/232, 259/321,

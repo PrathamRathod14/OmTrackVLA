@@ -376,6 +376,15 @@ the launcher processes.
 
 ## Change log
 
+### 2026-09-29 (technical review includes four local RTX trials)
+
+- Updated the dated technical review PDF to distinguish the four supervised local
+  RTX fusion trials from the two-GPU hybrid dry-runs. The review now records each
+  weight, target-lock and gate counts, odometry endpoint change, and the unresolved
+  Run D command-authority gap. It keeps the hybrid's live locked-target motion
+  unverified and cites the detailed trial report. This is a documentation update;
+  the upstream waypoint model and local controller behavior did not change.
+
 ### 2026-09-29 (restore 75% target / 25% OmTrackVLA setting)
 
 - Set `fusion_target_weight` from `1.0` back to `0.75` for the next restarted

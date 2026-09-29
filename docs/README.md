@@ -14,8 +14,8 @@ setup guide.
 - [`OmTrackVLA Ridgeback technical review 2026-09-28.pptx`](OmTrackVLA%20Ridgeback%20technical%20review%202026-09-28.pptx):
   September 28 editable technical review; it predates the September 29 hybrid split.
 - [`OmTrackVLA Ridgeback technical review 2026-09-29.pdf`](../output/pdf/OmTrackVLA_Ridgeback_technical_review_2026-09-29.pdf):
-  current six-page review of the hybrid architecture, frame sequence, identity checks,
-  command fusion, measured evidence, and remaining validation gates. Regenerate it
+  current seven-page review of the hybrid architecture, frame sequence, identity checks,
+  command fusion, measured evidence, four local RTX fusion trials, and remaining validation gates. Regenerate it
   with [`build_ridgeback_review_pdf.py`](build_ridgeback_review_pdf.py).
 
 Compatibility links remain under `real_robot/` for older commands and workspace
