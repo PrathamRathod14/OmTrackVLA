@@ -168,16 +168,16 @@ build; the JSON string carries the same fields.
 Configured in `ridgeback.yaml`:
 
 ```text
-Follow the person who is holding blue basket.
+Follow the person who is wearing black T-shirt.
 ```
 
 The complete prompt is supplied unchanged to OmTrackVLA. The target manager strips a
 leading `Follow` and trailing clauses such as `Maintain a safe distance.` to form the
-Grounding DINO query (`the person who is holding blue basket`).
+Grounding DINO query (`the person who is wearing black T-shirt`).
 
-The attribute phrase (`blue basket`) is extracted from the query by dropping the subject
+The attribute phrase (`black T-shirt`) is extracted from the query by dropping the subject
 word (`person`, `man`, ...) and fillers (`who is visibly holding a`, `wearing`, ...).
-Grounding DINO is prompted with separate phrases, `person. blue basket.`.
+Grounding DINO is prompted with separate phrases, `person. black T-shirt.`.
 
 Target selection rules:
 
@@ -369,6 +369,14 @@ physical E-stop reachable. Press Ctrl+C to stop the foreground deadman and shut 
 the launcher processes.
 
 ## Change log
+
+### 2026-09-29 (active prompt changed to black T-shirt)
+
+- `ridgeback.yaml` now selects `Follow the person who is wearing black T-shirt.`
+  for the next launch; the blue-basket prompt remains a commented option. The
+  supervised motion observation below used the earlier blue-basket prompt and does
+  not validate target selection with the new prompt. Model weights, fusion, and
+  safety configuration are unchanged.
 
 ### 2026-09-29 (supervised local motion observation)
 

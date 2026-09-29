@@ -9,7 +9,8 @@
     # Edit this line to change the natural-language target used at startup.
     # prompt: Follow the person who is wearing dark red T-shirt.
     # prompt: Follow the person who is wearing long white coat lab.
-    prompt: Follow the person who is holding blue basket.
+    # prompt: Follow the person who is holding blue basket.
+    prompt: Follow the person who is wearing black T-shirt.
     # prompt: Follow the person who is holding a silver bottle.
 
     dry_run: true

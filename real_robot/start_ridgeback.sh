@@ -171,6 +171,13 @@ echo "Output mode: $([ "$DRY_RUN" = true ] && echo DRY-RUN || echo ARMABLE)"
 echo "Prompt topic: /$ROBOT_NAMESPACE/omtrackvla/prompt"
 echo "Deadman topic: /$ROBOT_NAMESPACE/omtrackvla/enable"
 
+# ROS 2 rejects an empty value in a -p override. In local mode the YAML default
+# already leaves perception_host empty; only override it for hybrid mode.
+PERCEPTION_HOST_ARGS=()
+if [ -n "$PERCEPTION_HOST" ]; then
+    PERCEPTION_HOST_ARGS=(-p "perception_host:=$PERCEPTION_HOST")
+fi
+
 /usr/bin/python3 "$PROJECT_DIR/real_robot/ridgeback_ros2_node.py" \
     --ros-args \
     -r "__ns:=/$ROBOT_NAMESPACE" \
@@ -182,7 +189,7 @@ echo "Deadman topic: /$ROBOT_NAMESPACE/omtrackvla/enable"
     -p "camera_compressed:=$CAMERA_COMPRESSED" \
     -p "inference_host:=$INFERENCE_HOST" \
     -p "inference_port:=$INFERENCE_PORT" \
-    -p "perception_host:=$PERCEPTION_HOST" \
+    "${PERCEPTION_HOST_ARGS[@]}" \
     -p "perception_port:=$PERCEPTION_PORT" \
     -p "dry_run:=$DRY_RUN" \
     "$@"
